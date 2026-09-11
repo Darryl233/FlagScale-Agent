@@ -1,0 +1,25 @@
+# know-ascend-operators
+# Ascend算子优化知识：FlagScale/Megatron/TE实际分派、公共接口与梯度语义、Triton/Ascend C热点实验和性能边界
+
+# To read a section: load_knowledge(name='know-ascend-operators', doc='<path below>', start_line=<L>, end_line=<L>)
+# Do NOT pass these doc paths to read_file — they are knowledge-internal.
+
+## ascend_operators/operator-optimization.md (161 lines)
+L17: 算子热点、调用链与实现判断依据
+  L24: 热点分桶与关键路径
+  L44: 三仓调用链与绑定证据
+    L62: TransformerEngine-FL dispatch
+  L83: 竞争性解释及其证据
+  L95: 实现选择与仓库归属
+  L114: 正确性与公共接口契约
+  L130: Kernel 与 public-call 计时口径
+  L147: Qwen3.5 Ascend 历史诊断模式
+
+## ascend_operators/kernel-experiments.md (73 lines)
+L17: 有界 kernel 实验
+  L21: 1. 固定比较对象与实验边界
+  L27: 2. 核实目标能力
+  L33: 3. 根据证据选择改动
+  L44: 4. 核算活跃量与极端输入
+  L63: 5. 分层验收并返回公共路径
+  L71: 参考经验与本地事实

@@ -1,0 +1,16 @@
+# know-ascend-profiling
+# Ascend性能采集与分析知识：torch_npu profiler生命周期、导出字段、step与时钟关联、设备任务区间及通信/Host归因边界
+
+# To read a section: load_knowledge(name='know-ascend-profiling', doc='<path below>', start_line=<L>, end_line=<L>)
+# Do NOT pass these doc paths to read_file — they are knowledge-internal.
+
+## ascend_profiling/collection-and-analysis.md (178 lines)
+L3: 采集入口、输入适配与证据契约
+  L8: 采集前确认实际能力
+  L21: FlagScale 训练入口核验
+    L41: 实测兼容检查：构造成功只是第一步
+  L69: 先判定输入能做什么
+  L105: window 输出契约
+  L129: 从区间到原因
+  L148: 方法来源与改编边界
+  L163: 独立 wrapper 的兼容边界与早期验证

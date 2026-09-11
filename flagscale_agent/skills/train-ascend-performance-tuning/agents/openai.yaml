@@ -1,0 +1,4 @@
+interface:
+  display_name: "昇腾训练调优"
+  short_description: "用一个主循环完成三仓昇腾训练的基线、候选比较与复测交付"
+  default_prompt: "使用 $train-ascend-performance-tuning，从当前训练配方建立基线，在已有资源与预算内选择方法生成候选，运行比较并交付复测结论。"

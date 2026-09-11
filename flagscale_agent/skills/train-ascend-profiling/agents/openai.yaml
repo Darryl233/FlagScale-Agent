@@ -1,0 +1,4 @@
+interface:
+  display_name: "昇腾训练性能采集与分析"
+  short_description: "采集并分析昇腾训练性能数据，定位设备空闲、通信与算子瓶颈"
+  default_prompt: "使用 $train-ascend-profiling 分析已有昇腾训练性能数据，给出可核验的瓶颈证据与下一步实验建议。"

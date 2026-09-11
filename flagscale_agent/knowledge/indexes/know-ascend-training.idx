@@ -1,0 +1,100 @@
+# know-ascend-training
+# Ascend训练调优知识：三仓配置消费、并行与显存约束、重计算/通信/图模式、测量和数值恢复语义、注明版本的实测案例
+
+# To read a section: load_knowledge(name='know-ascend-training', doc='<path below>', start_line=<L>, end_line=<L>)
+# Do NOT pass these doc paths to read_file — they are knowledge-internal.
+
+## ascend_training/stack-capabilities.md (137 lines)
+L1: 三仓能力与调优器接入
+  L7: 环境指纹与实际路径
+  L32: 能力矩阵
+    L52: 有效配置与跨特性证据
+  L62: FlagScale native tuner 的源码审查
+    L75: 已核对的源码行为
+    L90: 接入配置片段
+  L119: native 输出的证据范围
+  L132: 当前源码缺失时的官方入口
+
+## ascend_training/search-space.md (133 lines)
+L1: 昇腾训练配置搜索空间与约束
+  L7: 先校验约束，再启动训练
+  L50: 形成参数白名单
+  L75: 分阶段自适应搜索
+    L79: A. 可行域与内存边界
+    L99: B. MBS、重计算和布局
+    L111: C. 关键路径驱动的局部开关
+    L127: D. 搜索成本与结论边界
+
+## ascend_training/recompute-overlap-graphs.md (90 lines)
+L1: 重计算、通信重叠与图模式的组合调优
+  L7: 1. 先归因内存，再选择重计算
+  L33: 2. 跨特性兼容证据
+  L52: 3. overlap 分步消融
+  L69: 4. NPU 图模式的有条件实验
+  L86: 5. 结果解释的边界
+
+## ascend_training/measurement-and-records.md (102 lines)
+L1: 训练测量与正确性证据
+  L5: 目标与受控差异
+  L13: 计时与吞吐口径
+  L38: 稳定窗口与 rank
+  L54: 独立 A/B 与正确性
+
+## ascend_training/production-optimization.md (400 lines)
+L17: Ascend Training Performance: Mechanisms and Trade-offs
+  L21: Contents
+  L34: 1. Critical-Path Model and Production Metrics
+    L36: Optimize the slowest rank, not summed tables
+    L53: Primary production metrics
+    L71: Recommended optimization order
+  L83: 2. Compute
+    L85: Questions
+    L92: Evidence to collect
+    L102: Optimization methods
+    L115: Diagnostic experiments
+    L122: Anti-patterns
+  L129: 3. Memory
+    L133: Evidence to collect
+    L142: Capacity methods
+    L153: Bandwidth and copy methods
+    L162: Allocator/runtime methods
+    L170: Acceptance
+  L174: 4. Communication
+    L178: Evidence to collect
+    L188: Optimization methods
+    L201: Diagnostics
+    L208: Anti-patterns
+  L215: 5. Parallelism
+    L219: Validate arithmetic first
+    L227: Dimension trade-offs
+    L237: Search method
+  L255: 6. Scheduling
+    L259: Evidence to collect
+    L277: Optimization methods
+    L289: Risks
+  L296: 7. Load Balance
+    L300: Sources of imbalance
+    L309: Evidence to collect
+    L318: Optimization methods
+    L328: Diagnostic-only controls
+  L332: 8. Runtime and System Engineering
+    L336: Host and launch path
+    L345: Data path
+    L353: Compilation and caches
+    L360: Allocator, logging, and checkpointing
+    L367: Production reliability
+  L376: 9. Cross-Dimensional Trade-offs
+  L394: 10. Evidence for Production Claims
+
+## ascend_training/hardware-validation.md (164 lines)
+L3: 实机验证范围与限制
+  L7: 2026-09-08 首轮：单机 16 逻辑 NPU 批量调优
+  L37: 从实际失败补充的检查
+  L56: 2026-09-08 扩展轮：分布式策略与后端边界
+
+## ascend_training/sources-and-adaptation.md (48 lines)
+L1: 官方与社区方法的适配边界
+  L5: 借鉴了什么，落在哪里
+  L20: 纠正容易误用的结论
+  L31: 本地代码与数据核对
+  L39: 来源与许可处理

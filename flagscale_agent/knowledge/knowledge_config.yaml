@@ -178,3 +178,25 @@ know-energon:
     - megatron_energon/04_metadataset.md
     - megatron_energon/05_wrappers.md
     - megatron_energon/06_distributed_loading.md
+
+know-ascend-training:
+  description: "Ascend训练调优知识：三仓配置消费、并行与显存约束、重计算/通信/图模式、测量和数值恢复语义、注明版本的实测案例"
+  docs:
+    - ascend_training/stack-capabilities.md
+    - ascend_training/search-space.md
+    - ascend_training/recompute-overlap-graphs.md
+    - ascend_training/measurement-and-records.md
+    - ascend_training/production-optimization.md
+    - ascend_training/hardware-validation.md
+    - ascend_training/sources-and-adaptation.md
+
+know-ascend-profiling:
+  description: "Ascend性能采集与分析知识：torch_npu profiler生命周期、导出字段、step与时钟关联、设备任务区间及通信/Host归因边界"
+  docs:
+    - ascend_profiling/collection-and-analysis.md
+
+know-ascend-operators:
+  description: "Ascend算子优化知识：FlagScale/Megatron/TE实际分派、公共接口与梯度语义、Triton/Ascend C热点实验和性能边界"
+  docs:
+    - ascend_operators/operator-optimization.md
+    - ascend_operators/kernel-experiments.md
