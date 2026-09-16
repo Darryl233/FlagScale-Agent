@@ -82,6 +82,8 @@ def _tokens_indicate_launch(tokens: list[str]) -> bool:
             continue
         sub = tokens[i + 1]
         rest = tokens[i + 2:]
+        if sub in ("train", "run") and any(t in ("--help", "-h") for t in rest):
+            continue
         if sub == "train":
             if any(t == f or t.startswith(f + "=") for t in rest for f in _NON_RUN_FLAGS):
                 return False
@@ -139,6 +141,16 @@ def _inner_command(tokens: list[str]) -> str | None:
     return None
 
 
+def _command_segments(cmd: str):
+    """Split shell operators outside quotes, preserving wrapper bodies for shlex."""
+    start = 0
+    for match in re.finditer(r"""'[^']*'|"(?:\\[\s\S]|[^"\\])*"|\\[\s\S]|([;&|\n]+)""", cmd):
+        if match.group(1):
+            yield cmd[start:match.start()]
+            start = match.end()
+    yield cmd[start:]
+
+
 def _is_flagscale_launch_command(cmd: str, _depth: int = 0) -> bool:
     """Detect FlagScale training launch commands.
 
@@ -170,20 +182,23 @@ def _is_flagscale_launch_command(cmd: str, _depth: int = 0) -> bool:
         cmd_lower,
         flags=re.MULTILINE | re.DOTALL,
     )
+    cmd_lower = cmd_lower.replace("\\\n", "")
 
-    try:
-        tokens = shlex.split(cmd_lower)
-    except ValueError:
-        # Unbalanced quotes — fall back to a whitespace split. Basename checks
-        # still avoid the classic substring false positive.
-        tokens = cmd_lower.split()
+    # Each command owns its query flags. A preceding --help/--dryrun must not
+    # hide a subsequent launch, including an ssh/bash wrapper after `cd &&`.
+    for command in _command_segments(cmd_lower):
+        try:
+            tokens = shlex.split(command)
+        except ValueError:
+            # Preserve the existing fallback for incomplete shell input.
+            tokens = command.split()
 
-    if _tokens_indicate_launch(tokens):
-        return True
+        if _tokens_indicate_launch(tokens):
+            return True
 
-    if _depth < _MAX_WRAPPER_DEPTH:
-        inner = _inner_command(tokens)
-        if inner:
-            return _is_flagscale_launch_command(inner, _depth + 1)
+        if _depth < _MAX_WRAPPER_DEPTH:
+            inner = _inner_command(tokens)
+            if inner and _is_flagscale_launch_command(inner, _depth + 1):
+                return True
 
     return False
