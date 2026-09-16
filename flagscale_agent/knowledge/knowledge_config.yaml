@@ -180,14 +180,13 @@ know-energon:
     - megatron_energon/06_distributed_loading.md
 
 know-ascend-training:
-  description: "Ascend训练调优知识：三仓配置消费、并行与显存约束、重计算/通信/图模式、测量和数值恢复语义、注明版本的实测案例"
+  description: "Ascend训练调优知识：三仓配置消费、并行与显存约束、重计算/通信/图模式、测量和数值恢复语义及版本适用条件"
   docs:
     - ascend_training/stack-capabilities.md
     - ascend_training/search-space.md
     - ascend_training/recompute-overlap-graphs.md
     - ascend_training/measurement-and-records.md
     - ascend_training/production-optimization.md
-    - ascend_training/hardware-validation.md
     - ascend_training/sources-and-adaptation.md
 
 know-ascend-profiling:

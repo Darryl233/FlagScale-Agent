@@ -17,13 +17,12 @@
 # 算子热点、调用链与实现判断依据
 
 本文解释热点证据、NPU 公共接口接入、实现归属和正确性/计时判断。
-操作顺序见主调优流程的 [算子方法](../../../skills/train-ascend-performance-tuning/methods/operator.md)；
 完整更新与 A/B 测量口径见 [共享测量依据](../ascend_training/measurement-and-records.md)。
 纯通信、并行、数据或调度问题可查 [训练优化知识](../ascend_training/production-optimization.md)。
 
 ## 热点分桶与关键路径
 
-比较单位为同一 run/attempt、已确认 step/rank 下的
+比较单位为同一次运行、已确认 step/rank 下的
 `op / public callable × shape × dtype × layout × rank/stage`。
 不同采集开关、运行或基线/候选的数据具有不同来源，不能直接合并。缺失字段保留未知。
 
@@ -39,7 +38,7 @@ MatMul 的 M/N/K 取决于真实张量语义和转置。MoE kernel 的尺寸取�
 不能仅由模型配置推断。shape 可由公共调用参数或有界探针确认，不一定需要整场开启高开销采集。
 
 累计 device 时间是筛选依据，重叠事件之和不是 step 耗时；聚合表也不能证明关键路径。
-分桶方法参考 [社区计算分析技能](https://github.com/ascend-ai-coding/awesome-ascend-skills/blob/main/skills/profiling/profiling-analysis/profiling-analysis-computing/SKILL.md)，具体归属和结论仍来自当前运行证据。
+同名算子在不同 shape、dtype、layout 或 rank 下可能对应不同瓶颈，分桶后仍需根据调用链和时间线确定归属。
 
 ## 三仓调用链与绑定证据
 
@@ -144,18 +143,19 @@ kernel 更快而完整调用更慢，常提示新增转换、分配或同步抵�
 吞吐目标需要解释关键路径上的收益来源，容量或可靠性目标也可能预先允许一定耗时代价。
 微基准仅决定候选是否值得继续；训练收益按共享测量依据判断，不能由单一快 kernel 推导。
 
-## Qwen3.5 Ascend 历史诊断模式
+## MoE 与 GDN 的条件化诊断
 
-以下是保留的部署经验，不是当前所有版本的能力声明。使用前核对安装修订、调用链和本次证据；
-没有原始日志时不引用历史加速数字。
+以下判断取决于模型结构、安装修订和实际调用链，不能仅凭模型名称推断。
 
-- 每批对完整序列调用 `empty_cache()` 曾引入同步/分配代价；冗余调用移出数据热路径后训练改善。
-- MoE 未融合 dispatch 曾暴露 AICPU `argsort`；融合 permutation 与 NPU mask-map 接入消除了该路径的回退。
-- chunk-sort 大 token 算子测试通过的实验改写，因无端到端收益而撤回。
-- 强制 router 均衡有助于排除专家负载不均，但因改变训练语义只用于诊断。
-- GDN 的 `l2norm`、`chunk_gated_delta_rule` 接入位于 Megatron-LM-FL Ascend override 层。
-- TE permutation 的 Python/Triton 路径曾需要公共 facade adapter，不能假定统一经过 compiled-extension。
-- 合并后实现文件仍在而 NPU 注册丢失，实际选择日志与公共 API 探针暴露了问题。
-- `moe_router_fusion` 是否可启用，取决于当前选中后端是否注册兼容的 fused top-k。
+| 现象或条件 | 机制与判断依据 |
+| --- | --- |
+| 数据热路径逐批调用 `empty_cache()` | 释放缓存可能增加后续分配或同步成本；是否冗余取决于内存生命周期及调用前后的设备依赖，不能仅凭调用存在就删除 |
+| MoE dispatch 中出现 AICPU `argsort` | 可能来自 token 排列和索引构造；需关联公共 permutation 调用，比较后端融合实现及 NPU mask-map 的语义、适用输入和完整调用成本 |
+| 大 token 排序 kernel 更快，但训练未变快 | chunk-sort 等局部算法可能受输入整理、辅助张量、同步或关键路径份额限制；算子正确性不等于端到端收益 |
+| 不同专家的 token 数相差较大 | 路由分布可能影响负载与通信；强制均匀路由会改变训练语义，只能用于隔离负载不均假设 |
+| GDN 使用 `l2norm`、`chunk_gated_delta_rule` | 接入层取决于实际 FLA override；Megatron-LM-FL Ascend override 与其下游实现的签名、梯度和绑定需一致 |
+| TE permutation 走 Python/Triton 路径 | 该路径可能绕过 compiled-extension，公共 facade adapter 是否安装决定训练能否调用目标实现 |
+| 实现文件可导入，但仍选中参考后端 | 注册、backend 导入或 facade 安装可能缺失；选择日志与公共 API 的实际绑定比文件存在更有判别力 |
+| 配置启用 `moe_router_fusion` | 当前后端必须提供已注册且兼容的 fused top-k；还需满足返回值、dtype、索引与梯度契约 |
 
-更底层资源、tile 和极端输入依据见 [kernel 实验知识](kernel-experiments.md)。
+更底层资源、tile 和极端输入依据见 [kernel 资源与正确性依据](kernel-experiments.md)。

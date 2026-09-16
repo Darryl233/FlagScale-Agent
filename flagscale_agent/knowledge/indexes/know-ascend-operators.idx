@@ -6,20 +6,19 @@
 
 ## ascend_operators/operator-optimization.md (161 lines)
 L17: 算子热点、调用链与实现判断依据
-  L24: 热点分桶与关键路径
-  L44: 三仓调用链与绑定证据
-    L62: TransformerEngine-FL dispatch
-  L83: 竞争性解释及其证据
-  L95: 实现选择与仓库归属
-  L114: 正确性与公共接口契约
-  L130: Kernel 与 public-call 计时口径
-  L147: Qwen3.5 Ascend 历史诊断模式
+  L23: 热点分桶与关键路径
+  L43: 三仓调用链与绑定证据
+    L61: TransformerEngine-FL dispatch
+  L82: 竞争性解释及其证据
+  L94: 实现选择与仓库归属
+  L113: 正确性与公共接口契约
+  L129: Kernel 与 public-call 计时口径
+  L146: MoE 与 GDN 的条件化诊断
 
-## ascend_operators/kernel-experiments.md (73 lines)
-L17: 有界 kernel 实验
-  L21: 1. 固定比较对象与实验边界
-  L27: 2. 核实目标能力
-  L33: 3. 根据证据选择改动
-  L44: 4. 核算活跃量与极端输入
-  L63: 5. 分层验收并返回公共路径
-  L71: 参考经验与本地事实
+## ascend_operators/kernel-experiments.md (69 lines)
+L17: Ascend kernel 的资源、正确性与性能依据
+  L21: 比较对象与收益上限
+  L27: 目标能力与版本边界
+  L33: 瓶颈与优化机制
+  L44: 资源活跃量与极端输入
+  L63: 分层性能与集成正确性

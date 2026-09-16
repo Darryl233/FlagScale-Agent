@@ -4,13 +4,12 @@
 # To read a section: load_knowledge(name='know-ascend-profiling', doc='<path below>', start_line=<L>, end_line=<L>)
 # Do NOT pass these doc paths to read_file — they are knowledge-internal.
 
-## ascend_profiling/collection-and-analysis.md (178 lines)
-L3: 采集入口、输入适配与证据契约
-  L8: 采集前确认实际能力
-  L21: FlagScale 训练入口核验
-    L41: 实测兼容检查：构造成功只是第一步
-  L69: 先判定输入能做什么
-  L105: window 输出契约
-  L129: 从区间到原因
-  L148: 方法来源与改编边界
-  L163: 独立 wrapper 的兼容边界与早期验证
+## ascend_profiling/collection-and-analysis.md (146 lines)
+L3: NPU profiling 的采集兼容性与分析依据
+  L8: 采集能力与依赖
+  L21: FlagScale 训练入口的配置与绑定
+    L41: 接口兼容检查：构造成功只是第一步
+  L62: 输入字段与分析能力
+  L97: 时间窗统计与完整性
+  L116: 从区间到原因
+  L135: 独立 wrapper 的兼容边界与有效性证据

@@ -1,18 +1,18 @@
-# 重计算、通信重叠与图模式的组合调优
+# 重计算、通信重叠与图模式的机制与约束
 
-本篇解释重计算、通信重叠与图模式的收益条件、相互约束和验证依据。训练语义、计时、状态与正确性门禁共用 [测量与实验记录](measurement-and-records.md)；系统代价见 [生产优化手册](production-optimization.md)。
+重计算用重放代价交换保存张量的内存，通信重叠改变计算与通信的时序，图模式减少重复调度开销。三者共享张量生命周期、RNG 和异步执行依赖，因而收益与兼容性不能独立相加。指标含义见 [训练测量与正确性](measurement-and-records.md)，系统代价见 [系统优化机制](production-optimization.md)。
 
-这里列的是待验证边界与实验方法。参数名用于定位 Megatron-LM-FL/TE-FL 源码，不构成可直接复制的 FlagScale YAML。NVIDIA 研究依据与适配说明集中维护在 [来源与适配](sources-and-adaptation.md)。
+参数名表示 Megatron-LM-FL/TE-FL 中可能存在的实现边界，不构成可直接复制的 FlagScale YAML；具体支持由当前 validator、模型结构和 NPU 后端共同决定。跨平台参数与实现差异见 [平台适配边界](sources-and-adaptation.md)。
 
-## 1. 先归因内存，再选择重计算
+## 1. 内存来源与重计算边界
 
-分开观察常驻模型/optimizer 状态、保存 activation、重放/算子 workspace、通信 buffer 与 allocator/图缓存。记录所有 rank 在模型初始化、首个完整 optimizer step、稳态真实数据阶段的 allocated/reserved 峰值；数值或 API 缺失保持未知。
+训练内存包括常驻模型/optimizer 状态、保存 activation、重放/算子 workspace、通信 buffer 与 allocator/图缓存。模型初始化、首个完整 optimizer step 和稳态真实数据可能分别出现峰值；容量由最重 rank 的实际峰值约束，缺失的 API 或数据不能解释为零占用。
 
 高 reserved 可能只是健康缓存；单 rank OOM 可能来自 stage 或 token 偏斜，二者都不能直接证明碎片。仅在 allocator 证据与目标 NPU API 支持成立时比较相关选项，不能引用 CUDA allocator 的“零开销”结论。
 
-若首个 step 尚未返回，allocated 已异常增长，先检查原始异常栈中 checkpoint backward 是否反复重入，并区分真正的算子重试与递归调用。按栈中的类和函数定位，不能将所有 selective 重计算问题归到 `CheckpointWithoutOutput`。[本机版本例证](hardware-validation.md)中，小 dense 的 selective `mlp` 在普通 `CheckpointFunction.backward` 出现约 246 次重复帧并耗尽显存，而 core/full 对照完成更新；这不支持将所有 MLP 重计算判为不支持，也不支持直接归因于 allocator 碎片。保留失败阶段、调用栈与显存证据；只有调用路径变化或新增观测能回答未解问题时再考虑有界复现，不用盲调 MBS 或 allocator 反复触发同一故障。
+首个 step 未返回而 allocated 异常增长时，checkpoint backward 反复重入是需要与正常重放区分的机制。`CheckpointFunction.backward` 的递归与 `CheckpointWithoutOutput` 是不同的定位入口，实际栈中的类和函数决定问题归属。递归耗尽显存属于后向执行故障，不能仅因最终异常是 OOM 就解释为普通容量不足或 allocator 碎片；降低 MBS 可能延后耗尽，却不能消除递归。某个 selective 模块路径的问题也不代表所有 MLP 重计算均不受支持。
 
-容量和预算允许时保留明确无重计算 control，固定 backend、layout、MBS/GBS、精度和输入；同条件已证实的 OOM 可直接引用，不为对照重复确定性失败。根据真实峰值选择最小有效边界，逐项比较时间与峰值；不是按模块名称固定顺序叠加。
+重计算的边际收益由相同 backend、layout、MBS/GBS、精度和输入下的保存张量差异决定，同时受到重放时间与峰值迁移影响。最小有效边界由实际峰值张量决定，而不是固定模块顺序；无重计算配置若超出容量，只能说明该条件下的容量差异，不能提供有效的稳态时间对照。
 
 | 结构/证据 | 可检查的边界与源码关键词 | 必须核实的代价或无效情形 |
 | --- | --- | --- |
@@ -24,17 +24,17 @@
 | 整 MoE 区域必须释放才可运行 | outer MoE，可能名为 `moe` | 可能重跑 router、dispatch/combine、expert 与 shared-expert；计入通信和 transient backward 峰值 |
 | shared expert 是独立峰值 | shared-expert MLP，可能名为 `shared_experts` | 检查是否已被外层 checkpoint 覆盖、是否与 shared-expert overlap 冲突 |
 
-只在当前 validator 接受且实际执行路径证明生效时加入这些标签。标签存在于文档、输出配置或另一分支并不够。GDN/其他混合架构从本版保存张量和实现推导，不借用 attention/MoE 模块表猜测覆盖范围。
+模块标签只有被当前 validator 接受并在实际路径执行，才代表对应重计算边界。标签存在于文档、输出配置或另一分支并不够。GDN/其他混合架构的有效边界取决于自身保存张量与实现，不能由 attention/MoE 模块表推断覆盖范围。
 
-细粒度候选仍不足时再比较更宽或 full-layer 边界；也可因状态容量问题转向分片/布局。full granularity 的 method/层数和 selective 模块列表不应误当作叠加参数，按本版解析器清理失效字段。uniform/block 在 PP/VPP 下的实际层分布也须核对。
+更宽或 full-layer 边界通常释放更多保存张量，也会重放更多计算和可能的通信；状态容量则主要受分片与布局影响。full granularity 的 method/层数与 selective 模块列表有不同语义，未启用相应 granularity 的字段可能无效或冲突。uniform/block 在 PP/VPP 下的实际层分布由 schedule 和层划分共同决定。
 
-若 OOM 从 forward 迁移到梯度同步或 optimizer，记录新失败阶段与峰值，但状态仍是 oom。必须覆盖首次 optimizer 状态分配和多个代表性更新，不能以“比 baseline 多走一步”验收容量。
+OOM 从 forward 迁移到梯度同步或 optimizer 只表示峰值阶段改变，仍未满足完整更新的容量要求。首次 optimizer 状态分配与真实数据波动可能高于 forward 峰值。
 
 ## 2. 跨特性兼容证据
 
-为候选维护一张小表：组合、精确三仓/运行时版本、配置 validator、实际调用边界、支持证据、probe 结果和 fallback。没有验证的组合保留 `evidence_level=unknown`；静态不兼容记录原因后停止该分支。
+组合兼容性由三仓/运行时版本、配置 validator、实际调用边界、分组和 fallback 路径共同决定。静态允许、功能可运行和数值等价属于不同层次，不能互相替代。
 
-| 组合 | 在目标实现上追踪的问题 | 实验关注点 |
+| 组合 | 实现依赖 | 正确性与性能边界 |
 | --- | --- | --- |
 | whole-MoE 重计算 + EP overlap | backward replay 是否重入已重排的 dispatch/combine 区域，validator 是否拒绝 | 通信顺序、重复/遗漏梯度、hang；必要时比较关闭 overlap 与窄边界两条合法路径 |
 | shared-expert 重计算 + shared-expert overlap | shared expert 是否被移出原 forward 顺序、保存/重放状态是否一致 | 本版是否互斥，不能复制 upstream 禁用规则后宣称 NPU 验证完成 |
@@ -45,41 +45,40 @@
 | offload + PP/重计算/graph | 当前 offload 实现的限制、传输 stream、buffer 生命周期 | 只有本版支持且传输/主机容量合适才加入候选；不直接沿用 NeMo 的 PP=1 门槛 |
 | 精度/backend + 任一边界 | 对应 dtype、保存/重放与累积实现是否支持 | 保持已授权精度与容差；NVIDIA TE 版本号不能证明 TE-FL 能力 |
 
-先静态检查，再按任务范围做最小有界功能验证；无新增 hang、有限 loss 只是初筛，梯度/更新等价仍按共享契约检查。初始化成功不证明 overlap 或 graph 已执行；补真实绑定、hook/replay 或时间线证据。
+无 hang、有限 loss 只说明基本运行状态，不能证明梯度与更新等价。初始化成功也不证明 overlap 或 graph 已执行；实际绑定、调用边界、replay 和时间线分别说明不同执行事实。
 
 调用计数可证明对应边界被命中，但不证明实际通信重叠时长；TE adapter 调用也不保证没有后端 fallback。此类 hook 用于功能、质量或 profile 诊断，带 hook 的运行不进入稳定性能排名，即使采集结束时 hook 已恢复。
 
-## 3. overlap 分步消融
+## 3. overlap 的依赖与归因
 
-只调当前关键路径上的通信。记录集体操作、消息规模、生产/消费位置、等待时刻、所用 stream、额外 buffer 和最慢 rank；集体操作总时长不是未覆盖时间。
+overlap 的价值取决于通信是否暴露在最慢 rank 的关键路径上。集体操作类型、消息规模、生产/消费位置、等待时刻、stream 与额外 buffer 共同决定可隐藏程度；集体操作总时长不等于未覆盖时间。
 
-DP reduce/gather、PP P2P、expert dispatch/combine、shared expert 是不同候选。先以当前稳定布局和 dispatcher 为 control，单独加入一个受支持 overlap；比较内存增量、暴露通信与完整 step，再决定组合。
+DP reduce/gather、PP P2P、expert dispatch/combine 和 shared expert 具有不同的依赖与内存开销。布局或 dispatcher 同时变化时，通信差异不能只归因于 overlap；有效收益是完整 step 的缩短，并需考虑额外内存与计算竞争。
 
-对 expert 路径采用下列隔离方式；不存在的能力不创建实验：
+expert 路径的主要依赖为：
 
-1. 固定 routing、dispatcher、重计算和图设置，比较普通 dispatch/combine overlap。
-2. 保持普通 overlap 已生效，独立加入 delayed wgrad；检查梯度累积和 optimizer 消费时序。
-3. 确有通信瓶颈且目标 NPU 后端受支持时，再比较 dispatcher 或 shared-expert 方案。
-4. 保留单项有效候选后，重新验证可兼容组合，检查通信/算力资源竞争和内存峰值。
+| 机制 | 关键依赖 |
+| --- | --- |
+| dispatch/combine overlap | routing、dispatcher、重计算和图模式决定 token 流与重放顺序 |
+| delayed wgrad | 权重梯度必须在归约与 optimizer 消费之前完成，并保持跨 microbatch 累积语义 |
+| dispatcher/shared-expert 变化 | 可能改变通信算法、forward 顺序和临时张量生命周期 |
+| 多机制组合 | 单项合法不保证组合合法；共享通信与计算资源可能增加等待和峰值内存 |
 
-便捷开关可能同时启用 EP overlap、delayed wgrad、关闭 shared-expert overlap，或替换 dispatcher；以实际 helper 源码为准。保存调用前后完整有效 diff。若无法拆开，在卡片中把它描述为一组联合变更，不能据此给单项收益归因。
+便捷开关可能同时启用 EP overlap、delayed wgrad、关闭 shared-expert overlap，或替换 dispatcher，具体联动由 helper 实现决定。此时完整有效差异是一组联合变更，不能把收益归因于某一个开关。
 
-bucket/prefetch 参数先查单位与作用域，再选相邻值。确认是按字节、元素还是参数数量，以及 dtype 转换后的通信大小；不可直接搬 GPU 示例中的数值。开关被 runtime 静默关闭时记录有效值与原因，不能将其计为有效消融。
+bucket/prefetch 参数可能按字节、元素或参数数量计量，dtype 转换还可能改变实际通信大小。不同单位、作用域或平台的数值不能直接比较；开关被 runtime 静默关闭时，输入配置变化不构成有效的机制消融。
 
-## 4. NPU 图模式的有条件实验
+## 4. NPU 图模式的收益条件
 
-只有 host/launch/调度开销位于关键路径，且当前 FlagScale→Megatron-LM-FL→TE-FL/torch_npu 路径确有图能力时进入本节。没有实现时记录缺口，不用 CUDA 配置名、NVTE/NCCL 环境变量模拟支持。
+图模式主要减少重复 host/launch/调度开销；只有这些成本位于关键路径且 FlagScale→Megatron-LM-FL→TE-FL/torch_npu 路径具有图实现，才存在相应收益空间。CUDA 配置名或 NVTE/NCCL 环境变量本身不代表 NPU 图支持。
 
-1. 保留当前 eager control，先完成真实数据、正确性与所需 shape 的稳定运行。
-2. 查明具体图实现、可捕获范围、shape/RNG 限制、collective、重计算与 hook 的兼容性。
-3. 从最小有用范围或受支持的 bounded shape 集开始；记录 warmup、compile/capture、replay 三个阶段。
-4. 验证 replay 实际发生，观测 graph break、重编译、静默回退与各 rank 常驻内存。
-5. 在匹配输入、layout、dispatcher 与容器下比较 replay 稳态和 eager；capture 成本单独报告。
-6. 确有目标收益且内存可接受后，才扩大范围或加入 overlap，并重新测该组合。
+图执行包含预热、compile/capture 与 replay，不同阶段的时间含义不同。capture 成本需要由后续 replay 摊销；持续 graph break、重编译或静默回退可能抵消调度节省。图还可能增加各 rank 的常驻内存。
 
-dropless MoE 的 expert token 数可能动态变化。先找现有实现可捕获的静态子区域；不能为了全图擅改路由、capacity/drop-token 或训练有效 token 口径。padding/packing 改动须先按共享不变量判断语义与比较组。
+可捕获范围由 shape/RNG 稳定性、collective、重计算与 hook 的兼容性决定。最小静态子区域与受支持的 bounded shape 集可能比整模型更适合捕获；扩大范围或加入 overlap 会改变依赖和内存边界。replay 与 eager 的性能可比性要求输入、layout、dispatcher、运行环境和数学语义一致。
 
-必须检查图模式下 RNG/dropout、gradient accumulation、recompute 与多次 optimizer 更新。若图实现限制在线诊断，先明确缺失的观测并以任务要求的等价检查补足；不能照抄上游“关闭 NaN 检查”来宣称通过正确性门禁。
+dropless MoE 的 expert token 数可能动态变化，因而全图捕获不一定适用。改变 routing、capacity/drop-token 或有效 token 口径会改变训练问题；padding/packing 也可能改变张量、mask 与比较语义，不能只视为图执行优化。
+
+图模式下的 RNG/dropout、gradient accumulation、recompute 和 optimizer 更新必须保持相应语义。在线诊断被图实现限制时，未观察到异常不等于数值正确；关闭 NaN 检查也不会增加正确性证据。
 
 图内存增量、可节省的 host 开销和 capture 的摊销都由目标工作负载测量；不承诺固定 GB 或加速百分比。持续重编译、重复 capture 与回退是生产成本，不能全部事后剔除来制造稳态收益。
 
@@ -87,4 +86,4 @@ dropless MoE 的 expert token 数可能动态变化。先找现有实现可捕�
 
 重计算、overlap 和图模式的效果取决于实际模块边界、helper 联动、峰值阶段以及通信/计算竞争。单项有效不保证组合有效，模块加速比不能相加；没有效果也可能来自未执行、静默禁用或 fallback，需与性能退化区分。
 
-容量目标按约定的时间代价衡量，速度目标按完整更新衡量。短跑可行不能证明生产稳定，跨版本、跨 layout 的单行历史数字也不能作为模块排名。具体执行、状态更新与下一步选择由 [主调优工作流](../../../skills/train-ascend-performance-tuning/SKILL.md) 负责。
+容量目标衡量内存需求与可接受的时间代价，速度目标衡量完整更新耗时。短跑可行不能证明生产稳定，不同版本或 layout 的单个数字也不能直接形成模块排名。
