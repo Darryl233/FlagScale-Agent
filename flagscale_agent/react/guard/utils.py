@@ -46,26 +46,30 @@ def _is_flagscale_launch_command(cmd: str) -> bool:
     # Remove quoted content to avoid false positives like grep "flagscale train"
     cleaned = re.sub(r'''["'][^"']*["']''', '', cmd_lower)
 
-    # Pattern 1: flagscale train <model>
-    if "flagscale train " in cleaned:
-        non_run_flags = ("--stop", "--dryrun", "--test", "--query", "--tune")
-        if any(flag in cleaned for flag in non_run_flags):
-            return False
-        return True
+    # Query flags belong to their command, not the entire shell expression:
+    # `flagscale train --help && flagscale train model` still launches training.
+    cleaned = cleaned.replace("\\\n", " ")
+    for command in re.split(r"[;&|\n]+", cleaned):
+        match = re.search(r"\bflagscale\s+(train|run)\s+(.+)", command)
+        if match:
+            args = match.group(2).split()
+            if "--help" in args or "-h" in args:
+                continue
+            if match.group(1) == "train":
+                non_run_flags = ("--stop", "--dryrun", "--test", "--query", "--tune")
+                if not any(flag in args for flag in non_run_flags):
+                    return True
+            else:
+                non_run_actions = ("--action dryrun", "--action stop", "--action test",
+                                   "--action query", "--action auto_tune",
+                                   "-a dryrun", "-a stop", "-a test")
+                if not any(a in command for a in non_run_actions):
+                    return True
 
-    # Pattern 2: flagscale run ...
-    if "flagscale run " in cleaned:
-        non_run_actions = ("--action dryrun", "--action stop", "--action test",
-                          "--action query", "--action auto_tune",
-                          "-a dryrun", "-a stop", "-a test")
-        if any(a in cleaned for a in non_run_actions):
-            return False
-        return True
-
-    # Pattern 3: python[3] run.py ... action=run
-    if ("python" in cleaned and "run.py" in cleaned
-            and ("--config-name" in cleaned or "--config-path" in cleaned)
-            and "action=run" in cleaned):
-        return True
+        # Pattern 3: python[3] run.py ... action=run
+        if ("python" in command and "run.py" in command
+                and ("--config-name" in command or "--config-path" in command)
+                and "action=run" in command):
+            return True
 
     return False

@@ -49,6 +49,7 @@ from __future__ import annotations
 import re
 
 from flagscale_agent.react.guard import Guard, GuardContext, GuardVerdict
+from flagscale_agent.react.guard.utils import READ_ONLY_TOOLS
 
 
 _VERIFICATION_REQUIRED_WITH_ACCEPTANCE = """[VerificationGuard] Before this step is done — answer three questions per criterion.
@@ -552,9 +553,9 @@ This gate fires once."""
 # into tool_args for the tool_name=="" completion ctx).
 _TEXT_COMPLETE_HYGIENE = """[VerificationGuard] Before this [TASK_COMPLETE] — a short wrap-up to close cleanly.
 
-This is an always-do finish-line routine (whether or not a plan_update(complete)
-cascade also ran). It covers four light hygiene items that are easy to forget but
-apply to every completion — NOT a re-run of deep delivery checks. Do them IN ORDER;
+No successful plan_update(complete) with its verification cascade has been recorded
+for this delivery. This finish-line routine covers four light hygiene items that
+are easy to forget — NOT a re-run of deep delivery checks. Do them IN ORDER;
 the order is load-bearing (verify before you clean, re-confirm delivery after you
 clean):
 
@@ -709,6 +710,8 @@ class VerificationGuard(Guard):
         # Set by check_pre when a step_done is about to pass through, so the
         # paired check_post fires the pre-mortem right after that same call.
         self._premortem_pending = False
+        self._completing_plan_id = None
+        self._completed_plan_id = None
 
     def reset_turn(self):
         """Reset per-turn state on a new user message.
@@ -728,8 +731,27 @@ class VerificationGuard(Guard):
         self._text_complete_hygiene_demanded = False
         self._step_done_recheck_reminded = False
         self._premortem_pending = False
+        self._completing_plan_id = None
+        self._completed_plan_id = None
 
     def check_post(self, ctx: GuardContext) -> GuardVerdict | None:
+        # Reuse this turn's successful, verified plan completion for its final
+        # text response. An attempted/blocked/failed complete is not evidence.
+        if ctx.tool_name == "plan_update" and ctx.tool_args.get("action") == "complete":
+            if (self._completing_plan_id and self._plan
+                    and self._complete_recheck_reminded
+                    and self._complete_delivery_hygiene_demanded
+                    and ctx.tool_result == "No active plan."):
+                if any(p.get("id") == self._completing_plan_id
+                       and p.get("status") == "completed"
+                       for p in self._plan.list_plans()):
+                    self._completed_plan_id = self._completing_plan_id
+            self._completing_plan_id = None
+        elif self._completed_plan_id and ctx.tool_name not in READ_ONLY_TOOLS:
+            # Also invalidate in post: tools in one model response can be
+            # pre-checked together before complete has actually executed.
+            self.reset_turn()
+
         # Pre-mortem: fires immediately AFTER a step_done that passed the pre-side
         # checks. The reversal ("assume you're wrong") lands hardest right when the
         # agent has just asserted the step is complete. Inject-only, fires per
@@ -744,6 +766,11 @@ class VerificationGuard(Guard):
         return None
 
     def check_pre(self, ctx: GuardContext) -> GuardVerdict | None:
+        if (self._completed_plan_id and ctx.tool_name
+                and ctx.tool_name not in READ_ONLY_TOOLS):
+            # Shell commands and unknown tools are conservatively treated as
+            # possible mutations. New work requires a new completion check.
+            self.reset_turn()
         # Timing 0a: pure-text [TASK_COMPLETE] finish path. The kernel consults
         # guards on a text-only completion with tool_name=="" (no plan_update),
         # so the plan_update(action="complete") hygiene chain below never fires
@@ -753,10 +780,6 @@ class VerificationGuard(Guard):
         # Guard against [NEED_USER_INPUT] (also routed here) — only fire on
         # [TASK_COMPLETE].
         #
-        # Only fire when there IS an active plan with work. Without an active
-        # plan (casual conversation, plan already completed/abandoned), the agent
-        # is not delivering task artifacts — firing here is noise that blocks
-        # every normal turn-end.
         # ctx.llm_responded gates this: only the completion-path consultation
         # (right after the LLM emitted the sentinel THIS iteration) sets it True.
         # The top-of-loop check_pre scans the last assistant message out of
@@ -773,19 +796,10 @@ class VerificationGuard(Guard):
             ) is not None
         )
         if ctx.tool_name == "" and _is_completion and ctx.llm_responded:
-            # Wrap-up check fired at every task completion. It is a light,
-            # always-applicable finish-line routine — near/far observation-vs-
-            # argument check, temp/.bak cleanup, memory review — NOT a re-run of
-            # the plan_update(complete) cascade's deep delivery verification.
-            #
-            # No overlap with the cascade: the cascade owns deep delivery checks
-            # (optimized/general/generalizes, reloaded-artifact, exact-contents);
-            # this owns the always-do wrap-up hygiene. Both can fire on a planned
-            # task without re-asking the same thing, because their content is
-            # disjoint. The earlier "re-run" complaint was about duplicated deep
-            # checks in this message, which have been removed — not about this
-            # gate firing at all. So it fires whether or not a cascade ran.
-            #
+            if self._completed_plan_id:
+                return None
+            # A cascade that was merely attempted is not a verified delivery.
+            # Keep the text backstop for those attempts and unplanned tasks.
             # Fires at most once per turn via _text_complete_hygiene_demanded.
             if not self._text_complete_hygiene_demanded:
                 if not ctx.override_reason.strip():
@@ -823,6 +837,9 @@ class VerificationGuard(Guard):
         # be noise on a pass/fail task. Fires once so it stays a checkpoint, not
         # nagging.
         if ctx.tool_name == "plan_update" and ctx.tool_args.get("action") == "complete":
+            if self._plan:
+                active = self._plan.get_active()
+                self._completing_plan_id = active.get("id") if active else None
             if not self._complete_recheck_reminded:
                 if not ctx.override_reason.strip():
                     return GuardVerdict.block(
