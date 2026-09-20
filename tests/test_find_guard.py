@@ -209,6 +209,43 @@ class TestBroadGrepBlocked:
         g = FindGuard()
         assert g.check_pre(_shell("cd /tmp && grep -rn x /home")).action == "block"
 
+    def test_grep_recursive_cwd_relative_targets_block(self):
+        g = FindGuard()
+        # `.` / `./` / `..` / `~` resolve to the cwd/parent/home at runtime;
+        # the guard cannot prove they are bounded, so a recursive walk from
+        # them is broad.
+        for target in (".", "./", "..", "~", "~/"):
+            v = g.check_pre(_shell(f"grep -rln pat {target}"))
+            assert v is not None and v.reason == "broad_recursive_grep", target
+
+    def test_grep_recursive_bare_glob_blocks(self):
+        g = FindGuard()
+        for target in ("*", ".*", "./*"):
+            v = g.check_pre(_shell(f"grep -rln pat {target}"))
+            assert v is not None and v.reason == "broad_recursive_grep", target
+
+    def test_grep_recursive_no_target_blocks(self):
+        g = FindGuard()
+        # No file operand -> grep defaults to `.` (the cwd) -> unbounded.
+        v = g.check_pre(_shell("grep -rln pat"))
+        assert v is not None and v.reason == "broad_recursive_grep"
+
+    def test_user_real_command_blocks(self):
+        g = FindGuard()
+        # Regression: a recursive grep piped through head, with a `.` target,
+        # was the exact command that escaped the guard before this fix.
+        cmd = ('cd /workspace/caozhou/baseline_v2 && ls *.py | head -30; '
+               r'echo "==="; grep -rln "initialize_model_parallel\|' 
+               'destroy_model_parallel" --include=*.py . 2>/dev/null | '
+               'grep -v site-packages | head')
+        v = g.check_pre(_shell(cmd))
+        assert v is not None and v.reason == "broad_recursive_grep"
+
+    def test_grep_cwd_relative_in_executor_payload_blocks(self):
+        g = FindGuard()
+        v = g.check_pre(_shell('ssh h "grep -rln pat ."'))
+        assert v is not None and v.reason == "broad_recursive_grep"
+
 
 class TestScopedGrepAllowed:
     """Scoped / non-recursive greps pass — they are what the guard recommends."""
@@ -239,3 +276,300 @@ class TestScopedGrepAllowed:
         g = FindGuard()
         # 'grep' as a non-command token should not trip the broad-grep path.
         assert g.check_pre(_shell("echo grep -rn foo /")) is None
+
+    def test_grep_quoted_pattern_with_scoped_target_allowed(self):
+        g = FindGuard()
+        # sanitize() blanks the quoted pattern, so the top-level layer must not
+        # mistake the scoped target for a pattern (any-positional rule). The
+        # lexer path keeps the pattern intact and sees a scoped target.
+        assert g.check_pre(_shell('grep -rn "foo" ./src')) is None
+        assert g.check_pre(_shell(r"grep -rln 'a\|b' --include=*.py ./src")) is None
+
+    def test_grep_named_component_target_allowed(self):
+        g = FindGuard()
+        # A named directory component is scoped even without `./`.
+        assert g.check_pre(_shell("grep -rln pat src")) is None
+        assert g.check_pre(_shell("grep -rln pat /workspace/caozhou/baseline_v2")) is None
+
+
+class TestHiddenFind:
+    """find / broad grep inside executor payloads and command substitution.
+
+    The top-level sanitize pass strips quoted regions (so `echo 'a | find b'`
+    stays allowed); but a quoted region handed to ssh/docker/bash is CODE the
+    executor will run — often on a remote host or NFS tree. Regression: the
+    user's real command escaped detection through ssh -> docker exec ->
+    bash -lc -> single-quoted find.
+    """
+
+    USER_ESCAPED = (
+        'ssh root@10.8.2.152 "docker exec caozhou_v2 bash -lc '
+        "'find / -maxdepth 8 -name .session.lock -path \"*sessions*\" "
+        '2>/dev/null | head -50\'"'
+    )
+
+    # ── block: executor payloads ──
+
+    def test_user_escaped_command_blocks(self):
+        v = FindGuard().check_pre(_shell(self.USER_ESCAPED))
+        assert v is not None and v.action == "block"
+
+    def test_ssh_docker_bash_find_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell('ssh h "docker exec c bash -lc \'find /x -name y\'"')) is not None
+
+    def test_ssh_direct_find_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell('ssh h "find /x -name y"')) is not None
+
+    def test_abs_path_find_in_payload_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell('ssh h "/usr/bin/find / -name y"')) is not None
+
+    def test_xargs_find_in_payload_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell('ssh h "ls | xargs find"')) is not None
+
+    def test_xargs_find_local_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("ls | xargs find / -name y")) is not None
+
+    def test_broad_grep_in_payload_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell('ssh h "docker exec c bash -c \'grep -r pattern /data\'"')) is not None
+
+    def test_kubectl_exec_find_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("kubectl exec pod -- find / -name y")) is not None
+
+    # ── block: command substitution executes ──
+
+    def test_cmd_subst_find_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("echo $(find / -name y)")) is not None
+
+    def test_backtick_find_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("echo `find / -name y`")) is not None
+
+    # ── block: top-level prefix / absolute-path forms (fixed here too) ──
+
+    def test_top_abs_path_find_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("/usr/bin/find / -name y")) is not None
+
+    def test_top_var_prefix_find_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("FOO=1 find / -name y")) is not None
+
+    def test_top_nohup_find_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("nohup find / -name y")) is not None
+
+    def test_top_sudo_find_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("sudo find / -name y")) is not None
+
+    # ── pass: pure data must NOT trip the hidden path ──
+
+    def test_echo_quoted_data_allowed(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("echo 'a | find b'")) is None
+
+    def test_python_c_quoted_data_allowed(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("python3 -c \"print('find /x')\"")) is None
+
+    def test_heredoc_body_find_allowed(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("python3 - <<'EOF'\nfind / -name y\nEOF")) is None
+
+    def test_plain_ssh_ls_allowed(self):
+        g = FindGuard()
+        assert g.check_pre(_shell('ssh h "ls /tmp"')) is None
+
+    def test_docker_exec_ls_allowed(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("docker exec c ls /data")) is None
+
+    def test_ssh_head_pipeline_allowed(self):
+        g = FindGuard()
+        assert g.check_pre(_shell('ssh h "ls /x | head -5"')) is None
+
+
+class TestHiddenEscapeFamilies:
+    """Round-2: systematic shell-escape coverage (obfuscation, wrappers,
+    pipe-to-shell, command substitution, variable taint, line continuation).
+
+    Each family pairs a MUST-block positive with controls that must stay
+    allowed (data payloads, non-executor words, scoped commands).
+    """
+
+    # --- obfuscated command words (quote-in-word / backslash / ANSI-C) ---
+    def test_quote_in_word_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("f'in'd /data")) is not None
+
+    def test_backslash_in_word_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("f\\ind /data")) is not None
+
+    def test_quote_glued_pairs_block(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("'f'ind /data")) is not None
+        assert g.check_pre(_shell("fi'nd' /data")) is not None
+
+    def test_ansi_c_quoting_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("$'find' /data")) is not None
+
+    def test_ansi_c_quoting_as_data_allowed(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("echo $'find' /data")) is None
+
+    # --- line continuation splitting the command word ---
+    def test_continuation_in_word_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("fi\\\nnd /data")) is not None
+
+    def test_continuation_inside_payload_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell('ssh h "fi\\\nnd /x"')) is not None
+
+    # --- subshell / brace / process substitution ---
+    def test_subshell_and_brace_block(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("(find /data)")) is not None
+        assert g.check_pre(_shell("{ find /data; }")) is not None
+
+    def test_process_substitution_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("cat <(find /data)")) is not None
+
+    # --- variable taint ---
+    def test_tainted_variable_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("X=find; $X /data")) is not None
+        assert g.check_pre(_shell('ssh h "X=find; $X /x"')) is not None
+
+    def test_tainted_non_executor_allowed(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("X=findutils; ls $X")) is None
+
+    def test_untainted_var_allowed(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("ls $X")) is None
+
+    # --- executor wrappers (timeout / eval / stdbuf / ...) ---
+    def test_timeout_wrapped_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("timeout 5 find /data")) is not None
+
+    def test_eval_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell('eval "find /data"')) is not None
+
+    def test_stdbuf_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("stdbuf -o0 find /data")) is not None
+
+    def test_wrapper_without_find_allowed(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("timeout 5 ls /data")) is None
+
+    # --- pipe-to-shell (echo payload | sh / bash / <<<) ---
+    def test_pipe_to_sh_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("echo 'find /x' | sh")) is not None
+
+    def test_double_quoted_payload_pipe_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell('echo "find /data -name x" | bash')) is not None
+
+    def test_herestring_pipe_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell('echo \'find /x\' <<< "" | sh')) is not None
+
+    def test_pipe_without_find_allowed(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("cat /etc/hosts | bash")) is None
+        assert g.check_pre(_shell("echo hi | wc -l")) is None
+
+    # --- command substitution carrying the executor ---
+    def test_cmd_subst_dollar_paren_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("ls $(find /data)")) is not None
+
+    def test_backtick_subst_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("echo `find /data`")) is not None
+
+    # --- payload depth: quoted payload executed by an executor ---
+    def test_ssh_bare_payload_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell('ssh h "find /data"')) is not None
+
+    def test_ssh_obfuscated_payload_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("ssh h \"f'i'n'd /x\"")) is not None
+
+    def test_ssh_echo_data_allowed(self):
+        g = FindGuard()
+        assert g.check_pre(_shell('ssh h "echo find /x"')) is None
+
+    # --- grep symmetry (absolute path / bare token after executor) ---
+    def test_grep_absolute_path_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("/usr/bin/grep -rn p /data")) is not None
+
+    def test_grep_bare_token_after_executor_blocks(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("kubectl exec pod -- grep -rn p /data")) is not None
+
+    def test_scoped_and_nonrecursive_grep_allowed(self):
+        g = FindGuard()
+        assert g.check_pre(_shell("grep p /etc/hosts")) is None
+        assert g.check_pre(_shell("grep -rn p ./src")) is None
+
+
+class TestCwdRelativeEscapeFamily:
+    """Round-3/4 hardening: the FULL cwd-relative / inline-pattern escape set.
+
+    These lock the two adversarial defects found after round-2: (a) deep `.`
+    chains (`../..`, `./.`) and always-unbounded env vars (`$HOME`, `${PWD}`)
+    escaped; (b) an inline pattern option (`--regexp=.`, `-e.`, `-fF`) was
+    mistaken for the pattern, so the real scoped target was dropped and the
+    call over-blocked.
+    """
+
+    def test_deep_dot_chain_blocks(self):
+        g = FindGuard()
+        for target in ("../..", "../../", "./.", "././.", "..//.."):
+            v = g.check_pre(_shell(f"grep -rln pat {target}"))
+            assert v is not None and v.reason == "broad_recursive_grep", target
+
+    def test_cwd_env_vars_block(self):
+        g = FindGuard()
+        for target in ("$HOME", "${HOME}", "$PWD", "${PWD}", "$OLDPWD"):
+            v = g.check_pre(_shell(f"grep -rln pat {target}"))
+            assert v is not None and v.reason == "broad_recursive_grep", target
+
+    def test_inline_pattern_with_scoped_target_allowed(self):
+        g = FindGuard()
+        # The pattern is INSIDE the option; the positional is a real target.
+        assert g.check_pre(_shell("grep -rn --regexp=. ./src")) is None
+        assert g.check_pre(_shell("grep -rn -e. ./src")) is None
+        assert g.check_pre(_shell("grep -rn -f pats.txt ./src")) is None
+
+    def test_inline_pattern_with_broad_target_blocks(self):
+        g = FindGuard()
+        # Inline pattern + a broad positional target must still block.
+        assert g.check_pre(_shell("grep -rn --regexp=. . ./src")).reason == "broad_recursive_grep"
+        assert g.check_pre(_shell("grep -rn -e. ./src .")).reason == "broad_recursive_grep"
+
+    def test_bare_pattern_option_keeps_scoped_target_allowed(self):
+        g = FindGuard()
+        # A BARE -e/--regexp takes the next token as its pattern; the remaining
+        # positional is the scoped target -> allowed.
+        assert g.check_pre(_shell("grep -rn -e . ./src")) is None
+        assert g.check_pre(_shell("grep -rn --regexp . ./src")) is None

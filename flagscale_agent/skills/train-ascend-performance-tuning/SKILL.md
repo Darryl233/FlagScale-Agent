@@ -9,7 +9,7 @@ description: 在 FlagScale 昇腾训练中执行基础调优闭环：固定工�
 
 当前阶段只启用 micro-batch（MBS）调整，先跑通 `基线 → 一个候选 → 比较 → 复测交付`。
 并行策略、重计算、通信重叠、图模式、profiling 和算子优化暂不接入本流程。
-默认只读本文件，不预加载其他 SKILL、Knowledge 或 methods 目录。遇到阻塞当前步骤的具体问题，
+默认只读本文件；实际启动训练时加载一次 `train-run`，复用其中的昇腾执行分支。不预加载其他 SKILL、Knowledge 或 methods 目录。遇到阻塞当前步骤的具体问题，
 只查询对应源码或 Knowledge 文档小节，得到答案即返回当前步骤；没有收益也不自动展开进阶搜索。
 
 ## 1. 确认比较条件
@@ -24,21 +24,12 @@ description: 在 FlagScale 昇腾训练中执行基础调优闭环：固定工�
 
 ## 2. 建立基线
 
-基线、候选和复测优先使用以下形式，`-c` 指向包含 `experiment` 和 `train` 的完整 FlagScale 配方：
-
-```bash
-flagscale train -c /绝对路径/baseline.yaml
-```
-
-文件名不限。在已确认的工作目录及三仓环境中执行；仅当当前 CLI 要求必填 MODEL 时，补上已确认的名称。
-同条件、同口径的有效基线可以复用。
-每次使用独立输出目录，启动前核对设备空闲、剩余预算、停止方式及日志可访问路径。
-单机、完整 YAML 的短跑优先按 [单次运行](references/single-run.md) 使用 `python -m flagscale_agent.training_run --request ...`。
-它仍通过 `flagscale train [model] -c <配置> --test` 启动；先确认当前版本 `--test` 表示前台训练。
-辅助模块一次完成等待真实退出、定位本次日志、检查 rank/迭代并保存测量。用 `shell(background=True)` 执行，
-按返回的 job id 调用 `shell_jobs(wait)`；等待正常运行无需反复列目录、读整份日志或自行编写轮询脚本。
-不满足辅助模块适用范围时沿用已验证的 CLI 启动，立即调用 `flagscale_train_monitor(mode="check", filter="progress", lines=3)`，
-使用该次实际输出目录；随后核对全部自有 worker 退出。CLI 默认后台启动的返回值不能证明训练结束。
+基线、候选和复测统一通过 `load_skill(name="train-run")` 使用 [训练执行流程](../train-run/SKILL.md)，选择 Ascend 分支。
+由 `train-run` 负责设备检查、`flagscale train -c <完整配方.yaml>` 启动、等待、停止和本次日志定位；文件名不限，CLI 必填时补 MODEL。
+把已确认的三仓环境、cwd、配置、设备授权、时间预算、固定布局和计时窗口交给它，沿用当前 plan 和实验记录。
+已有有效配方走“已验证配方的调优短跑”路径，不额外做单卡验证、改变 GBS/布局或重复加载其他技能。
+符合条件的单机短跑使用 `train-run` 中的有界执行辅助模块；返回命令、输出目录、准确 loss rank 日志及退出证据后，回到本流程比较。
+同条件、同口径的有效基线可以复用。仅分析已有结果时不加载启动流程、不启动训练。
 核对完整迭代、有限 loss/梯度、跳步/NaN 和退出证据，取得预热后的稳定计时窗口；缺失指标保持未知。
 基线失败或计时不稳时先定位当前问题，取得有效基线后再比较；本阶段不转入其他优化方法。
 单次期限由实际 launcher 控制；等待超时不等于训练停止，结束后确认全部自有 worker 退出。
@@ -52,7 +43,7 @@ flagscale train -c /绝对路径/baseline.yaml
 
 ## 4. 运行并比较
 
-按基线相同的启动、训练起点和测量规则短跑候选，核对实际 MBS、样本数、loss/梯度及异常计数。
+按已加载的 `train-run` 路径及基线相同的训练起点和测量规则短跑候选，核对实际 MBS、样本数、loss/梯度及异常计数。
 对支持的 Megatron 日志使用 `analyze_training_results`：每次运行提供一个准确的 loss rank 日志，
 使用 `log_interval=1`，明确首末 iteration、warmup_steps、GBS、sequence_length 和已约定的 loss 容差，设置 `output_path` 保存 JSON。
 每个比较请求只含原基线和一个固定候选；参数或结果字段不清楚时再读 [结果分析流程](references/result-analysis.md)。

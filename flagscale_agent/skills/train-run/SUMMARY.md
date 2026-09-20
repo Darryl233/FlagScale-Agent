@@ -16,8 +16,10 @@
 
 # Train-Run — Summary
 
-Launch, stop, and manage FlagScale distributed training jobs on GPU servers.
+Launch, monitor, stop, and verify FlagScale training with a common execution workflow and device-specific references.
 
-**Load when**: launching training, stopping a run, checking GPU availability, or debugging launch failures.
+**Load when**: launching training from a YAML recipe, stopping a run, checking assigned devices, or debugging launch failures. Tuning skills can reuse this execution workflow.
 
-Covers: server connection, environment checks, GPU availability, preflight validation (dependencies + data + config arithmetic), training launch via FlagScale CLI, stop commands, post-launch monitoring (stderr first!), log directory structure, and quick verification paths.
+Read the device index and only the matching reference for hardware probes, runtime checks and diagnostics. NVIDIA and Ascend instructions are provided; additional platforms extend the index and add a reference without adding vendor branches to the common workflow. Documented commands do not imply framework support or hardware validation.
+
+Share `flagscale train -c ...`, job tracking and log inspection; reuse verified setup within a tuning loop. Bounded single-host measurements retain the helper's execution requirements. Profiling is loaded only when requested.

@@ -547,15 +547,16 @@ This gate fires once."""
 # the plan_update(action="complete") gate chain above. Single-shot runs routinely
 # end with a bare [TASK_COMPLETE] and never call plan_update(complete), so the full
 # delivery-hygiene chain never fires for them. This is a focused last check on the
-# three things most easily left wrong at a text completion: path/constraint, exact
-# contents, and temp/backup cleanup. Fires once; overridable via the completion
+# things most easily left wrong at a text completion: path/constraint, exact
+# contents, temp/backup cleanup, and the harness-gap meta-question. Fires once;
+# overridable via the completion
 # path's text override channel (kernel._extract_text_override feeds _override_reason
 # into tool_args for the tool_name=="" completion ctx).
 _TEXT_COMPLETE_HYGIENE = """[VerificationGuard] Before this [TASK_COMPLETE] — a short wrap-up to close cleanly.
 
-No successful plan_update(complete) with its verification cascade has been recorded
-for this delivery. This finish-line routine covers four light hygiene items that
-are easy to forget — NOT a re-run of deep delivery checks. Do them IN ORDER;
+This is an always-do finish-line routine (whether or not a plan_update(complete)
+cascade also ran). It covers five light hygiene items that are easy to forget but
+apply to every completion — NOT a re-run of deep delivery checks. Do them IN ORDER;
 the order is load-bearing (verify before you clean, re-confirm delivery after you
 clean):
 
@@ -642,8 +643,26 @@ clean):
               already shipped, left unupdated, sends the next session to re-design what
               already exists.
 
-Re-issue [TASK_COMPLETE] with _override_reason: <near/far gap you reproduced, or
-"none apply">. This gate fires once."""
+  5. **HARNESS GAP & CAPTURE** — the meta-question items 1-4 cannot ask. Did THIS
+     session expose a gap in the agent harness itself — a failure the existing
+     guards, gates, prompts, tools, or memory machinery let happen (or caused),
+     worth codifying so the NEXT session cannot repeat it? Scan for the tell-tale
+     shapes:
+       • a mistake you made twice with no guard or gate catching it
+       • a pre-block that annoyed without preventing (a post-check/inject would
+         have served better), or a check that fired too late to help
+       • a retrieval or discipline gap (needed knowledge/memory existed but was
+         not consulted before acting)
+       • a verification that leaned on self-report where an observation was cheap
+     If YES, do not just note it in prose — CAPTURE it durably so it survives this
+     session: memory_write() an insight/agent/<topic> entry (finding / digest
+     direction / target artifact) that names the mechanism to build or change.
+     If genuinely none, answer "none" explicitly — but a session that edited
+     configs or repo code, debugged tooling, or repeated the same manual check
+     deserves a real look before claiming that.
+
+Re-issue [TASK_COMPLETE] with _override_reason: <near/far gap you reproduced,
+harness gap captured or "none", or "none apply">. This gate fires once."""
 
 
 # Pre-mortem, delivered AFTER a step_done goes through (check_post). The pre-side
@@ -796,10 +815,20 @@ class VerificationGuard(Guard):
             ) is not None
         )
         if ctx.tool_name == "" and _is_completion and ctx.llm_responded:
-            if self._completed_plan_id:
-                return None
-            # A cascade that was merely attempted is not a verified delivery.
-            # Keep the text backstop for those attempts and unplanned tasks.
+            # Wrap-up check fired at every task completion. It is a light,
+            # always-applicable finish-line routine — near/far observation-vs-
+            # argument check, temp/.bak cleanup, memory review, harness-gap
+            # capture — NOT a re-run of
+            # the plan_update(complete) cascade's deep delivery verification.
+            #
+            # No overlap with the cascade: the cascade owns deep delivery checks
+            # (optimized/general/generalizes, reloaded-artifact, exact-contents);
+            # this owns the always-do wrap-up hygiene. Both can fire on a planned
+            # task without re-asking the same thing, because their content is
+            # disjoint. The earlier "re-run" complaint was about duplicated deep
+            # checks in this message, which have been removed — not about this
+            # gate firing at all. So it fires whether or not a cascade ran.
+            #
             # Fires at most once per turn via _text_complete_hygiene_demanded.
             if not self._text_complete_hygiene_demanded:
                 if not ctx.override_reason.strip():
