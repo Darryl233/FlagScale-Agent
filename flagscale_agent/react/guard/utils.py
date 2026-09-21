@@ -82,11 +82,8 @@ def _tokens_indicate_launch(tokens: list[str]) -> bool:
             continue
         sub = tokens[i + 1]
         rest = tokens[i + 2:]
-<<<<<<< HEAD
         if sub in ("train", "run") and any(t in ("--help", "-h") for t in rest):
             continue
-=======
->>>>>>> main
         if sub == "train":
             if any(t == f or t.startswith(f + "=") for t in rest for f in _NON_RUN_FLAGS):
                 return False
@@ -144,7 +141,6 @@ def _inner_command(tokens: list[str]) -> str | None:
     return None
 
 
-<<<<<<< HEAD
 def _command_segments(cmd: str):
     """Split shell operators outside quotes, preserving wrapper bodies for shlex."""
     start = 0
@@ -155,8 +151,6 @@ def _command_segments(cmd: str):
     yield cmd[start:]
 
 
-=======
->>>>>>> main
 def _is_flagscale_launch_command(cmd: str, _depth: int = 0) -> bool:
     """Detect FlagScale training launch commands.
 
@@ -188,26 +182,6 @@ def _is_flagscale_launch_command(cmd: str, _depth: int = 0) -> bool:
         cmd_lower,
         flags=re.MULTILINE | re.DOTALL,
     )
-<<<<<<< HEAD
-    cmd_lower = cmd_lower.replace("\\\n", "")
-
-    # Each command owns its query flags. A preceding --help/--dryrun must not
-    # hide a subsequent launch, including an ssh/bash wrapper after `cd &&`.
-    for command in _command_segments(cmd_lower):
-        try:
-            tokens = shlex.split(command)
-        except ValueError:
-            # Preserve the existing fallback for incomplete shell input.
-            tokens = command.split()
-
-        if _tokens_indicate_launch(tokens):
-            return True
-
-        if _depth < _MAX_WRAPPER_DEPTH:
-            inner = _inner_command(tokens)
-            if inner and _is_flagscale_launch_command(inner, _depth + 1):
-                return True
-=======
 
     try:
         tokens = shlex.split(cmd_lower)
@@ -223,6 +197,5 @@ def _is_flagscale_launch_command(cmd: str, _depth: int = 0) -> bool:
         inner = _inner_command(tokens)
         if inner:
             return _is_flagscale_launch_command(inner, _depth + 1)
->>>>>>> main
 
     return False

@@ -572,12 +572,7 @@ it must be in the language they wrote to you in.
 
 Then, and only after the final answer above, do these five light hygiene items.
 This is an always-do finish-line routine (whether or not a plan_update(complete)
-<<<<<<< HEAD
-cascade also ran). It covers five light hygiene items that are easy to forget but
-apply to every completion — NOT a re-run of deep delivery checks. Do them IN ORDER;
-=======
 cascade also ran) — NOT a re-run of deep delivery checks. Do them IN ORDER;
->>>>>>> main
 the order is load-bearing (verify before you clean, re-confirm delivery after you
 clean):
 
@@ -675,11 +670,6 @@ clean):
        • a retrieval or discipline gap (needed knowledge/memory existed but was
          not consulted before acting)
        • a verification that leaned on self-report where an observation was cheap
-<<<<<<< HEAD
-     If YES, do not just note it in prose — CAPTURE it durably so it survives this
-     session: memory_write() an insight/agent/<topic> entry (finding / digest
-     direction / target artifact) that names the mechanism to build or change.
-=======
      If YES, do BOTH, in this order — propose first, implement never:
        1. PROPOSE — list each gap as an explicit improvement proposal, routed to
           the container that fits it, so the human can approve and prioritize:
@@ -709,17 +699,12 @@ clean):
        current is what stops the next wrap-up re-reporting settled items.
        CONTROL STAYS WITH THE HUMAN: at wrap-up you do NOT edit guards, tools,
        prompts, skills, or knowledge — a proposal is an output, not a license.
->>>>>>> main
      If genuinely none, answer "none" explicitly — but a session that edited
      configs or repo code, debugged tooling, or repeated the same manual check
      deserves a real look before claiming that.
 
 Re-issue [TASK_COMPLETE] with _override_reason: <near/far gap you reproduced,
-<<<<<<< HEAD
-harness gap captured or "none", or "none apply">. This gate fires once."""
-=======
 harness gap captured (registered + open ones re-reported) or "none", or "none apply">. This gate fires once."""
->>>>>>> main
 
 
 # Pre-mortem, delivered AFTER a step_done goes through (check_post). The pre-side
