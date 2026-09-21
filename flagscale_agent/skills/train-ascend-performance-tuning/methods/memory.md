@@ -28,14 +28,44 @@
 3. 返回 `parent`、`hypothesis`、`change`、`checks`，注明预期减少的内存来源与可能增加的重放/通信。
    若分片需要改变 optimizer family 或起始状态，先返回比较条件缺口，不能混入原状态的等价比较。
 
+### FlagScale 配方示例
+
+对支持 full/uniform 的 Megatron 模型，将以下片段合并到父配方；其他字段沿用父配置。
+无重计算基线不设置这一组字段。通过 `train-run` 启动，核对日志中三个同名参数的实际值；
+字段被拒绝或改写时再查当前版本的映射，不需要重新调查整个 launcher。
+
+```yaml
+train:
+  model:
+    recompute:
+      recompute_granularity: full
+      recompute_method: uniform
+      recompute_num_layers: 1
+```
+
+分布式优化器使用 `train.system.use_distributed_optimizer`。以下是含分布式 checkpoint 的候选片段；
+仅在当前版本要求或任务需要时联动保存格式，并记录这项差异。不要同时开启 overlap。
+
+```yaml
+train:
+  system:
+    use_distributed_optimizer: true
+    checkpoint:
+      ckpt_format: torch_dist
+```
+
+配方能运行只代表配置可用，分片和保存/恢复仍按下文单独验收。
+
 ## 额外检查
 
 - **启动前**：核对目标层/模块实际存在、保存与重放边界、PP/VPP 层分配及当前 overlap/graph 兼容性；
   核对状态分片的参数组、dtype、checkpoint schema 和实际加载范围。
-- **短跑**：确认重计算边界确实重放或 optimizer 状态确实分片；测量首次状态分配与完整更新峰值。
+- **短跑**：重计算诊断区分目标层的原始前向与反向阶段重放；只统计 checkpoint 入口次数不能证明重放。
+  分片诊断检查实际 optimizer 状态；两者均测量首次状态分配与完整更新峰值。
   保留 original/replay 的异常栈，区分峰值迁移、重复 backward 重入和真正的内存节省。
 - **质量比较**：重计算检查 RNG/dropout、梯度与参数更新；分片检查各活动参数组的主参数、
   optimizer 状态与更新步数。比较方法按需查 `ascend_training/measurement-and-records.md`。
+  比较 checkpoint 时先核对完整键集、形状、dtype 和有限性，再比较张量；最终权重一致不替代逐步梯度检查。
   任务要求续训时补齐保存/恢复检查；缺失状态与空参数组不能等同。
 
 ## 结果反馈

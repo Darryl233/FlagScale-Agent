@@ -48,9 +48,8 @@ python "$SKILL_DIR/scripts/generate_profile_wrapper.py" \
 核对目标 Python、实际训练模块、设备和剩余预算；记录 global ranks、wait/warmup/active 与训练退出条件。
 把 wrapper 配置到本次专用配方，沿实际 resolved/argv 关闭内置 profiler。
 保留模型、数据和分布式策略，只修改本次采集与短跑需要的项。
-使用原 launcher 执行这一次 `stage=profile` 运行，保存配方、窗口、设备、硬期限、退出条件和共享记录位置。
-按原生工具约定用 `shell(background=True)` 启动，紧接着 `flagscale_train_monitor(mode="check")`，
-再记录 job/目标端身份并用 `shell_jobs` 跟踪；远程日志按工具约定读取，另核对全部所属 worker 收尾。
+加载一次 `train-run`，复用已确认的环境和设备；单机 Megatron 短跑读取其 [单次运行说明](../train-run/references/single-run.md)，填写请求后照启动与等待命令执行，其他场景走其直接 CLI 路径。
+本次记录为 `stage=profile`，保存配方、窗口、设备、硬期限和准确日志路径。按所选执行路径跟踪 job 与退出结果，并核对全部所属 worker 收尾。
 取得实际命令、全 worker 日志与退出证据后继续验收。
 wrapper 按正常返回的 `train_step` 推进窗口，**窗口结束不会结束训练**；用配方和 launcher 控制训练退出。
 **得到**采集产物及全部 worker 日志，进入步骤 3。失败或窗口不足时保留证据并只收尾本作业；

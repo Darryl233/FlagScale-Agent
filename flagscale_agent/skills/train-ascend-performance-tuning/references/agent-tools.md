@@ -53,8 +53,8 @@ On resume, read the plan and records and check the actual jobs marked as running
 ## 3. Launch, Monitor, and Clean Up
 
 Use native `shell` to execute a verified launcher command. Run long commands in the background and capture the actual returned job ID.
-Load the required SKILLs and establish the log path before launching. The launch Guard requires an immediate `flagscale_train_monitor` call;
-do not insert `load_skill`, file writes, or polling between launch and that check. Here, `output_dir` points to this run's logs accessible to the Agent:
+Load `train-run` and select its execution path before launching. For bounded single-host runs, follow its request, launch and wait procedure; use the returned evidence paths.
+For direct CLI launches, the launch Guard requires an immediate `flagscale_train_monitor` call; do not insert other tools between launch and that check. Here, `output_dir` points to this run's logs accessible to the Agent:
 
 ```python
 shell(command=launch_command, background=True)

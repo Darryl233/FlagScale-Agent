@@ -17,6 +17,21 @@
 3. 补核本版 NPU attention、dispatcher 和 Ascend override 的实际路径；未验证组合附最小兼容性检查。
    返回 `parent / hypothesis / change / checks`，不自动生成全部维度组合，也不在此运行训练。
 
+### FlagScale dense 配方起点
+
+以下各行是独立候选，在父配方的 `train.system` 下修改，不把整表同时开启；通过已加载的 `train-run` 启动。
+
+| 目标 | 最小改动示例 | 保持或核对 |
+| --- | --- | --- |
+| TP | `tensor_model_parallel_size: 2` | 其余布局不变，核对派生 DP/累积 |
+| SP | `sequence_parallel: true` | 固定已验证的 TP>1，比较 SP 关闭/开启 |
+| PP | `pipeline_model_parallel_size: 2` | 固定 TP，层数与 microbatch 数满足调度 |
+| VPP | `num_virtual_stages_per_pipeline_rank: 2` | 固定 PP；四层、PP=2 时每个 chunk 一层，还须满足当前 P2P 调度约束 |
+
+VPP 不直接设置派生的 `virtual_pipeline_model_parallel_size`，也不同时设置多个 VPP 定义字段。
+若本版要求联动 P2P overlap，记录整个变更组；不能满足层分配或调度条件就暂缓该项。
+先核对启动日志中的实际参数；只在不支持、改写或分组证据缺失时查询对应实现，不重查整个 launcher。
+
 ## 额外检查
 
 - **启动前**：按当前初始化代码核对 dense/expert mesh、rank ordering、分片形状、有效 GBS 和 PP/VPP 调度，
