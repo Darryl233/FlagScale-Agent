@@ -198,6 +198,7 @@ know-linear-attention:
   description: "线性注意力FLA：GDN/GLA layer集成、chunk分块与WY三角解、递推状态kernel(chunk_delta_h)、门控cumsum、autograd管线、CP状态接力、dispatch/autotune缓存、平台坑表与调优"
   docs:
     - linear_attention/01_fla_source_analysis.md
+<<<<<<< HEAD
 
 know-ascend-training:
   description: "Ascend训练调优知识：三仓配置消费、并行与显存约束、重计算/通信/图模式、测量和数值恢复语义及版本适用条件"
@@ -219,3 +220,5 @@ know-ascend-operators:
   docs:
     - ascend_operators/operator-optimization.md
     - ascend_operators/kernel-experiments.md
+=======
+>>>>>>> main

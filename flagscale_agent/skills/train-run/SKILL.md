@@ -27,8 +27,13 @@ Launch, stop, and manage FlagScale distributed training jobs. Keep the execution
 
 ## Critical Rules
 
+<<<<<<< HEAD
 1. **If the user says the environment/conda is already set up, reuse it.** Select its device reference (Step 2), then verify only missing or changed preflight facts. Repair packages only after diagnosing a required dependency failure.
 2. **Observe the owned job and its current-run logs after starting training.** For direct CLI launches, call `flagscale_train_monitor(output_dir=..., mode="check")`; for the bounded helper below, use its job handle and built-in wait/log checks. A help query or dryrun is not a training launch.
+=======
+1. **If the user says the environment/conda is already set up, DO NOT install packages.** Go straight to preflight verification (Step 3). Only install if preflight imports fail.
+2. **After launching training (not dryrun — dryrun only generates scripts), you MUST immediately call `flagscale_train_monitor(output_dir=...)` to observe the process.** Do not proceed to other tasks without monitoring.
+>>>>>>> main
 3. **Never delete experiment output directories.**
 4. **Use the documented commands and parameters directly.** Reading CLI, launcher, or helper source is not a launch prerequisite. Investigate implementation only for an actual error or behavior that contradicts these instructions.
 
@@ -304,6 +309,7 @@ Default CLI execution may submit a background launcher and return early. `--test
 
 For the bounded helper, use its returned job handle and result for observation. Read additional logs only for a missing fact or anomaly; the following monitoring steps apply to direct CLI launches.
 
+<<<<<<< HEAD
 **Direct CLI path — within 30 seconds of launch:**
 1. Observe the returned job and actual output directory. Logs may not exist immediately after background submission; an initial missing directory is a startup state, not permission to select an older run.
 2. Use `flagscale_train_monitor(output_dir="<exp_dir>", mode="check", filter="progress", lines=3)` for logs. Query device state with the selected reference's probes when needed.
@@ -312,6 +318,72 @@ For the bounded helper, use its returned job handle and result for observation. 
 
 **Direct CLI path — after first metrics appear:**
 4. **Use `flagscale_train_monitor(output_dir="<exp_dir>", mode="check", filter="progress", lines=3, vocab_size=<vocab_size>)`** for a concise snapshot; increase detail only for a concrete anomaly. Use the selected reference's compatible monitoring path and owned-job waits. For timing comparisons, pass the exact loss-rank log to `analyze_training_results` with the caller's measurement window and output path.
+=======
+```
+workspace_experiment(action="create", name="<model>_<config>_<purpose>",
+    purpose="<what you are verifying and why>",
+    hypothesis="<expected outcome — e.g., loss ~ ln(vocab) and decreases>")
+```
+
+If the experiment already exists (retry after failure), skip this step.
+
+**0b. Record this attempt — BLOCKING GATE:**
+
+```
+workspace_experiment(action="add_attempt", name="<experiment_name>",
+    change="<what changed vs previous attempt, or 'initial run'>",
+    config={"model": "...", "tp": N, "pp": N, "dp": N, "ep": N,
+            "global_batch_size": N, "micro_batch_size": N, "seq_length": N,
+            "precision": "bf16", "train_iters": N, ...},
+    hardware={"gpus": N, "gpu_type": "...", "driver": "...", "cuda": "..."},
+    output_dir="<unique output directory for this attempt>")
+```
+
+**If you haven't called `add_attempt`, you are NOT allowed to call `flagscale train`.** This is the single most important discipline rule. During rapid debug-fix-retry cycles, this is ESPECIALLY critical — those are exactly the attempts you'll need to reconstruct later.
+
+**Version bumping rule — what counts as a new experiment:**
+- Changed a meaningful parameter (LR, TP/PP, batch size, data, model code) → new experiment (`create`)
+- Launch failed before any metrics (import error, path error, config typo) → same experiment, new attempt (`add_attempt` with change description)
+- Training crashed after producing metrics, restarting with same config → same experiment, new attempt
+
+**0c. Kill old processes and verify GPUs free:**
+
+```bash
+pgrep -fa "torchrun|train_|flagscale" | grep -v grep
+# If any found:
+pkill -9 -f "torchrun|train_|flagscale" 2>/dev/null; sleep 5
+nvidia-smi | grep -E "MiB|%"
+```
+
+#### POST-RESULT (do IMMEDIATELY after monitor/metrics return):
+
+**8a. Record the result — BLOCKING GATE:**
+
+```
+workspace_experiment(action="update_last_attempt", name="<experiment_name>",
+    result="<SUCCESS/FAILED — key metrics, loss trajectory, throughput, or error cause>")
+```
+
+**If you haven't called `update_last_attempt`, you are NOT allowed to proceed to the next task or launch.** Do this BEFORE fixing config, BEFORE analyzing, BEFORE anything else.
+
+**8b. Finalize (when done with this experiment line):**
+
+```
+workspace_experiment(action="finalize", name="<experiment_name>",
+    status="completed|failed",
+    learnings=["lesson 1", "lesson 2", ...],
+    root_cause="<if failed, what was the fundamental problem>")
+```
+
+**Within 30 seconds of launch:**
+1. **Wait 10-15 seconds** before checking logs — the log directory may not exist yet (race condition with nohup/background launch)
+2. Use `flagscale_train_monitor(output_dir="<exp_dir>", mode="check")` to auto-discover logs AND scan stderr — NEVER use raw `find` commands (they may find old logs from previous runs)
+3. If stderr has errors → training failed at startup. Fix and retry.
+4. **Check stderr FIRST, not stdout** — crash info is in stderr. A process showing "wandb initialized" in stdout may already be dead.
+
+**After first metrics appear (usually 1-3 minutes):**
+4. **Use `flagscale_train_monitor(output_dir="<exp_dir>", mode="check", vocab_size=<vocab_size>)`** — do NOT use `tail -f` or `grep` to manually scan logs. The tool parses structured metrics and runs the health checks automatically (`vocab_size` enables the random-output check). For continuous supervision use `mode="watch"` with `duration`.
+>>>>>>> main
 5. Interpret the health check results:
    - `loss ≈ ln(vocab_size)` → check against the intended initialization/data. This can be expected for scratch or mock-data runs; inspect actual checkpoint-load evidence when pretrained weights were requested.
    - `grad_norm = 0` or `num_zeros ≈ total_params` → gradients not flowing. Check loss computation, frozen params.
@@ -373,7 +445,11 @@ Key points:
 flagscale_train_monitor(output_dir="<exp_dir>", mode="check", vocab_size=<vocab_size>)
 ```
 
+<<<<<<< HEAD
 Use the actual experiment directory from the caller's record or helper result. Do not search other experiments to substitute for missing current-run logs.
+=======
+If the experiment dir is recorded in the experiment ledger memory entry, use that path directly. NEVER use `find`, `ls -R`, or shell globbing to search for log files.
+>>>>>>> main
 
 **Manual fallback:** if the tool is unavailable, inspect only the recorded run's `logs/details/host_*/<timestamp>/<run>/attempt_*/<rank>/` directories. Match the launch identity, scan rank stderr, and locate the rank that actually reports iterations/loss. Do not assume rank 0 or pick an older run because it has logs.
 

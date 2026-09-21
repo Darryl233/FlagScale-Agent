@@ -67,6 +67,8 @@ from flagscale_agent.react.memory import Memory
 from flagscale_agent.react.tools.memory_write import MemoryWriteTool
 from flagscale_agent.react.tools.memory_read import MemoryReadTool
 from flagscale_agent.react.tools.memory_list import MemoryListTool
+from flagscale_agent.react.proposals import ProposalRegistry
+from flagscale_agent.react.tools.proposal import ProposalTool
 from flagscale_agent.react.plan import TaskPlan
 from flagscale_agent.react.tools.monitor import FlagScaleTrainMonitorTool
 from flagscale_agent.react.tools.analyze_training_results import AnalyzeTrainingResultsTool
@@ -90,6 +92,10 @@ from flagscale_agent.react.guard.find_guard import FindGuard
 from flagscale_agent.react.guard.shell_jobs_wait import ShellJobsWaitGuard
 
 from flagscale_agent.react.guard.unit_test import UnitTestGuard
+<<<<<<< HEAD
+=======
+from flagscale_agent.react.guard.knowledge_index import KnowledgeIndexGuard
+>>>>>>> main
 from flagscale_agent.react.guard.post_edit_far_end import PostEditFarEndGuard
 from flagscale_agent.react.guard.memory_discipline import MemoryDisciplineGuard
 from flagscale_agent.react.guard.memory_post_check import MemoryPostCheckGuard
@@ -138,7 +144,7 @@ class WorkerAgent:
         self._knowledge_manager = KnowledgeManager()
 
         self._session_id = uuid.uuid4().hex[:8]
-        from flagscale_agent.react.paths import get_sessions_root, get_memory_dir
+        from flagscale_agent.react.paths import get_sessions_root, get_memory_dir, get_proposals_dir
         sessions_root = config.session_dir or get_sessions_root()
         session_dir = os.path.join(sessions_root, self._session_id)
         os.makedirs(session_dir, exist_ok=True)
@@ -185,6 +191,12 @@ class WorkerAgent:
 
         plan_dir = os.path.join(session_dir, "plans")
         self.task_plan = _task_plan or TaskPlan(plan_dir)
+
+        # Global, cross-session improvement-proposal registry. Lives outside the
+        # per-session dir on purpose: an unreviewed proposal raised in one
+        # session must resurface at a later session's wrap-up. This is what the
+        # wrap-up HARNESS GAP item reads to re-report unanswered proposals.
+        self.proposals = ProposalRegistry(get_proposals_dir())
 
         if not _tool_registry:
             self._register_tools()
@@ -304,6 +316,14 @@ class WorkerAgent:
         guard_registry.register(ShellJobsWaitGuard())
 
         guard_registry.register(UnitTestGuard())
+<<<<<<< HEAD
+=======
+        # KnowledgeIndexGuard (always active, inject-only): editing a knowledge
+        # doc shifts the line numbers cached in indexes/<group>.idx, so
+        # load_knowledge would read the wrong lines. Reminds to regenerate the
+        # index after such an edit. Mirrors UnitTestGuard. Never blocks.
+        guard_registry.register(KnowledgeIndexGuard())
+>>>>>>> main
         # PostEditFarEndGuard (always active, inject-only): after EVERY successful
         # write_file/edit_file, remind the agent to verify the FAR end — valid-for-
         # type on the edited file, the consumer's read path, and (for agent source)
@@ -326,7 +346,7 @@ class WorkerAgent:
         self._knowledge_guard = KnowledgeSkillGuard()
         guard_registry.register(self._knowledge_guard)
         # Verification discipline guard (always active, block on step_done without evidence)
-        guard_registry.register(VerificationGuard(plan=self.task_plan))
+        guard_registry.register(VerificationGuard(plan=self.task_plan, proposals=self.proposals))
 
         deps = KernelDeps(
             provider=self.provider,
@@ -391,6 +411,7 @@ class WorkerAgent:
         self.tool_registry.register(MemoryWriteTool(self.memory, self._session_id, task_plan=self.task_plan))
         self.tool_registry.register(MemoryReadTool(self.memory))
         self.tool_registry.register(MemoryListTool(self.memory))
+        self.tool_registry.register(ProposalTool(self.proposals, self._session_id))
         self.tool_registry.register(PlanCreateTool(self.task_plan, self._session_id))
         self.tool_registry.register(PlanUpdateTool(self.task_plan))
         self.tool_registry.register(PlanStatusTool(self.task_plan))
@@ -978,23 +999,86 @@ class WorkerAgent:
             """Enter always submits (even in multiline mode)."""
             event.current_buffer.validate_and_handle()
 
-        session = PromptSession(
-            history=FileHistory(history_file),
-            completer=completer,
-            multiline=True,
-            key_bindings=kb,
-            style=PromptStyle.from_dict({
-                "prompt": "#87d787 bold",
-                "": "#e4e4e4",
-            }),
+        def _build_session():
+            return PromptSession(
+                history=FileHistory(history_file),
+                completer=completer,
+                multiline=True,
+                key_bindings=kb,
+                style=PromptStyle.from_dict({
+                    "prompt": "#87d787 bold",
+                    "": "#e4e4e4",
+                }),
+            )
+
+        session = _build_session()
+
+        # ── Interactive input watchdog ──
+        # prompt_toolkit can occasionally wedge on its input fd: the process
+        # stays alive and the pane keeps rendering, but keystrokes are never
+        # consumed (observed as a main thread parked in ep_poll while stdin
+        # has pending, unread bytes). guard_state["at_prompt"] is True only
+        # while blocked in session.prompt(), so a long model/tool turn can
+        # never trip the watchdog. On a confirmed wedge it escalates to
+        # SIGINT; watchdog_state["tripped"] then tells the except below to
+        # rebuild the prompt session instead of treating it as a user exit.
+        from flagscale_agent.react.prompt_watchdog import PromptWatchdog
+        guard_state = {"at_prompt": False}
+        watchdog_state = {"tripped": False}
+
+        def _on_watchdog_sigint():
+            watchdog_state["tripped"] = True
+
+        def _pending_input_backlog() -> bool:
+            """Keys read off the tty but not yet dispatched by prompt_toolkit.
+
+            The classic wedge leaves bytes unread in the kernel (caught by
+            ``select``). A second wedge class has the reader *consume* the
+            keystroke and then stall before dispatching it, so ``select`` on the
+            fd sees nothing while the key sits in prompt_toolkit's userspace
+            queues. Consult both ``KeyProcessor.input_queue`` (fed but not
+            processed) and ``Vt100Input._buffer`` (parsed but not fed).
+            """
+            app = getattr(session, "app", None)
+            if app is None:
+                return False
+            kp = getattr(app, "key_processor", None)
+            if kp is not None and getattr(kp, "input_queue", None):
+                return True
+            inp = getattr(app, "input", None)
+            buf = getattr(inp, "_buffer", None) if inp is not None else None
+            return bool(buf)
+
+        watchdog = PromptWatchdog(
+            is_at_prompt=lambda: guard_state["at_prompt"],
+            on_sigint=_on_watchdog_sigint,
+            pending_probe=_pending_input_backlog,
+            logger=display.warn,
         )
+        watchdog.start()
 
         while True:
+            guard_state["at_prompt"] = True
             try:
                 user_input = session.prompt([("class:prompt", "> ")]).strip()
             except (EOFError, KeyboardInterrupt):
+                guard_state["at_prompt"] = False
+                if watchdog_state["tripped"]:
+                    # A wedged input loop was broken by the watchdog: rebuild a
+                    # fresh prompt session and keep going rather than exiting.
+                    watchdog_state["tripped"] = False
+                    display.warn("input loop was stuck — prompt session rebuilt")
+                    try:
+                        session = _build_session()
+                    except Exception:
+                        pass
+                    continue
                 self._exit()
                 break
+            except BaseException:
+                guard_state["at_prompt"] = False
+                raise
+            guard_state["at_prompt"] = False
 
             if not user_input:
                 continue
@@ -1107,6 +1191,12 @@ class WorkerAgent:
         self.tool_registry.register(MemoryWriteTool(
             self.memory, self._session_id, task_plan=self.task_plan))
         self.tool_registry.register(PlanCreateTool(self.task_plan, self._session_id))
+<<<<<<< HEAD
+=======
+        # Re-register the proposal tool under the restored session id (same
+        # capture-at-registration issue as memory_write/plan_create above).
+        self.tool_registry.register(ProposalTool(self.proposals, self._session_id))
+>>>>>>> main
 
         # Clean up the empty new session dir if it's different. The emptiness
         # predicate must ignore dotfiles (the lock file lives there) AND empty
@@ -1356,6 +1446,17 @@ class WorkerAgent:
         sessions = find_resumable_sessions(self._sessions_root)
         if sessions:
             hints.append(f"{len(sessions)} resumable session(s) - use /resume to restore")
+        # Surface unreviewed harness-improvement proposals at startup (not in the
+        # dashboard) so a long-pending one is visible before the next wrap-up.
+        try:
+            n_open = self.proposals.open_count()
+        except Exception:
+            n_open = 0
+        if n_open:
+            hints.append(
+                f"{n_open} open improvement proposal(s) awaiting review - "
+                "will be re-reported at wrap-up"
+            )
         return hints
 
     def _check_proxy(self):

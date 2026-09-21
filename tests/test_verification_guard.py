@@ -489,6 +489,33 @@ class TestConstraintGuidanceBlockedComputation:
         assert "not a content check" not in low  # delivery_hygiene doesn't say this
         assert "_override_reason" in _TASK_COMPLETE_DELIVERY_HYGIENE
 
+    def test_text_complete_hygiene_leads_with_final_answer(self):
+        """The wrap-up hygiene prompt must FIRST demand the turn's real final output
+        (not a checklist-only reply), because the user reads the end of the
+        conversation, not the intermediate steps."""
+        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+        low = _TEXT_COMPLETE_HYGIENE.lower()
+        # leads with the final answer before the hygiene items
+        assert "final answer" in low
+        assert "deliver" in low
+        # an addition, not a replacement for the real output
+        assert "replacement" in low or "addition" in low
+        # the framing: user does not read the middle, reads the end
+        assert "end of the conversation" in low or "end" in low
+        assert "intermediate steps" in low or "intermediate" in low
+        # the final-answer directive must come BEFORE the first hygiene item
+        assert low.index("final answer") < low.index("near vs far")
+
+    def test_text_complete_hygiene_requires_user_language(self):
+        """The wrap-up prompt must instruct responding in the USER'S OWN language,
+        so a Chinese task does not get an English template answer."""
+        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+        low = _TEXT_COMPLETE_HYGIENE.lower()
+        assert "user's own language" in low or "user's language" in low
+        assert "language" in low
+        # the rationale: this is the message the user actually reads
+        assert "actually read" in low or "they will actually" in low
+
 
 
 class TestTaskCompleteRecheck:
@@ -1738,6 +1765,31 @@ class TestTextCompleteHygieneGate:
         assert "re-running to re-confirm what you already observed is waste" in low
         # fresh run is the gated fallback
         assert "only when your trace has no such evidence" in low
+
+    def test_wrap_up_harness_gap_proposes_for_human_approval(self):
+        """Item-5 is proposal-mode: the agent routes each gap to a container
+        (agent code / skill / knowledge) as an explicit one-line proposal for the
+        human to approve and prioritize. Capture still happens (insight), but the
+        agent must NOT edit harness files at wrap-up — control stays with the
+        human."""
+        from flagscale_agent.react.guard.verification import _TEXT_COMPLETE_HYGIENE
+        low = " ".join(_TEXT_COMPLETE_HYGIENE.lower().split())
+        # routing taxonomy: three containers named
+        assert "agent code" in low
+        assert "a skill" in low and "multi-step procedure" in low
+        assert "knowledge" in low and "promote-to-knowledge" in low
+        # proposal-first ordering, then capture
+        assert "propose first, implement never" in low
+        assert "propose —" in low
+        assert "capture —" in low
+        assert "one line" in low
+        # control stays with the human: no self-editing at wrap-up
+        assert "control stays with the human" in low
+        assert "an output, not a license" in low
+        # capture channel intact (survives session even if message unseen)
+        assert "memory_write()" in low
+        # legacy escape hatch intact
+        assert "none apply" in low
 
     def test_observation_demand_prefers_existing_trace(self):
         """The observation-demand gate must first point at the trace: the observation

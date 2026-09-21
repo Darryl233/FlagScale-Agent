@@ -59,8 +59,13 @@ class TestKnowledgeManager:
         km = KnowledgeManager()
         assert km.root.exists()
         # 17 base groups + know-moe-training (MoE pretraining perf survey)
+<<<<<<< HEAD
         # + know-linear-attention (FLA source analysis) + 3 Ascend groups
         assert len(km.available_groups) == 22
+=======
+        # + know-linear-attention (FLA source analysis)
+        assert len(km.available_groups) == 19
+>>>>>>> main
 
     def test_init_custom_dir(self, knowledge_dir):
         """Test initialization with custom directory."""
