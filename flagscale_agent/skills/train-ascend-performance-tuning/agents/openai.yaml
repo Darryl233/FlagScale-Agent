@@ -1,4 +1,4 @@
 interface:
   display_name: "昇腾训练调优"
-  short_description: "用一个主循环完成三仓昇腾训练的基线、候选比较与复测交付"
-  default_prompt: "使用 $train-ascend-performance-tuning，从当前训练配方建立基线，在已有资源与预算内选择方法生成候选，运行比较并交付复测结论。"
+  short_description: "围绕显存、计算与通信选择和组合实验，在预算内完成昇腾训练调优"
+  default_prompt: "使用 $train-ascend-performance-tuning，根据当前训练的显存、计算效率和通信开销，在已有资源与预算内自主选择方法、探索组合，交付通过复测的配置和结论。"

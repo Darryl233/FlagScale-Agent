@@ -18,8 +18,8 @@ PYTHONUNBUFFERED=1 flagscale train -c /absolute/path/recipe.yaml --test
 | `experiment.runner.nproc_per_node` | 每节点训练进程数，与本次设备分配一致 |
 | `experiment.exp_dir` | 本次独立输出目录，用于定位日志 |
 
-Agent 用 `shell(background=True)` 执行，保存 job id，再用 `shell_jobs(action="wait", job_id=..., timeout=60)` 等待。
-结束后通过 `flagscale_train_monitor(output_dir=<exp_dir>, mode="check")` 检查本次训练日志，并确认 worker 已退出后再复用设备。
+Agent 用 `shell(background=True)` 执行并保存 job id，先调用 `flagscale_train_monitor(output_dir=<exp_dir>, mode="check")`，再用 `shell_jobs(action="wait", job_id=..., timeout=60)` 等待。
+结束后检查本次日志和 worker 退出证据，再复用设备；首次监测没有日志不等于启动失败。
 
 按需将 `--test` 替换为 `--dryrun`（只生成脚本）或 `--stop`（停止该配方作业，先确认属于本任务）；这些不是正常启动的附加步骤。
 

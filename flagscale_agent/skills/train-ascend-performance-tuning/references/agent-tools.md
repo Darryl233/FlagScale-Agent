@@ -38,6 +38,10 @@ Use `stage` to distinguish `train / probe / quality / performance / profile` as 
 Meaningful configuration/patch changes create a new candidate with its parent retained. Advice, wrapper generation, and analysis of old files do not create an executed attempt.
 Leave unknown metrics empty with a reason, rather than filling them with zero. Distinguish observations, run success, quality acceptance, and final adoption.
 
+For tuning, aim to retain three plausible hypotheses with distinct mechanisms as a starting point; use fewer when evidence or feasible methods are insufficient, and more when the budget warrants. This does not require one per direction or running every hypothesis. Keep them in the same record: a stable label, claim, supporting/contradicting evidence links, next experiment and expected observations, and status (`pending / exploring / paused / closed`). Distinguish mechanisms, not merely parameter values; candidates and results reference the relevant label in `hypothesis`.
+Update only affected entries when choosing an experiment or receiving decision-relevant evidence; for append-only records, append the complete updated hypothesis state and resume from the latest hypothesis entry per label. On resume, retain pending alternatives and pause reasons alongside the current candidate.
+Include the applicable configuration scope and why a branch continues, pauses, or reopens. Hypotheses may coexist; an unexplained result stays unresolved. This is experiment-file content, not a new tool interface, per-command checklist, or separate report.
+
 This example only demonstrates appending a record; actual field values must come from real output. `completed` means only that this job completed:
 
 ```python
