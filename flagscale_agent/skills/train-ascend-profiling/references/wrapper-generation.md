@@ -1,25 +1,16 @@
 <!-- Copyright 2026 FlagOS Contributors. SPDX-License-Identifier: Apache-2.0 -->
 
-# 生成 torch_npu profiler 训练入口
+# Generate a torch_npu Profiler Training Entrypoint
 
-原训练入口可以正常运行，且需要独立采集 NPU profile 时使用。适用于通过
-`megatron.training.training.train/train_step` 执行的 FlagScale Megatron 入口，包括 Qwen3.5。
-实现由 [生成器](../scripts/generate_profile_wrapper.py) 和 [独立模板](../assets/npu_profile_wrapper.py) 组成。
-生成器只需 Python 标准库，不启动训练；产物运行时使用目标训练环境已有的 torch、torch_npu 和三仓依赖。
+Use this workflow when the original training entrypoint already runs and an independent NPU profile is needed. It applies to FlagScale Megatron entrypoints that run through `megatron.training.training.train/train_step`, including Qwen3.5. The implementation consists of the [generator](../scripts/generate_profile_wrapper.py) and a [standalone template](../assets/npu_profile_wrapper.py). The generator needs only the Python standard library and does not launch training. The generated wrapper runs with the target environment's existing torch, torch_npu, and three-repository dependencies.
 
-生成器会检查 `--entrypoint` 是本机存在的原始训练文件。在已有权限可访问目标环境时，可在那里只运行生成命令；
-若本次无法访问该环境且只有远端路径，交付目标环境的生成命令和配方改动，明确 `.py` 尚未生成。
-不要创建空的同名入口来通过检查，也不要把待执行命令写成采集成功。
+The generator checks that `--entrypoint` is an existing original training file on the machine where it runs. If the target environment is accessible, run only the generation command there. If this attempt cannot access that environment and only has a remote path, deliver the generation command and recipe change for the target environment, and state that the `.py` file has not been generated. Do not create an empty entrypoint to bypass the check or describe a pending command as a successful collection.
 
-## 1. 核对入口并生成
+## 1. Verify the entrypoint and generate
 
-在目标容器中复用原作业已确认的 cwd、Python 与模块路径。FlagScale launcher 可将自身
-`flagscale/train` 放入 `PYTHONPATH`，因此 `megatron.training.training` 不一定来自 Megatron-LM-FL 仓库。
-只在绑定路径尚未确认或发生错误时核对实际模块文件；已有记录不重复调查。
-`--training-file` 可将核实的路径作为运行时保护；它不是按仓库名称猜出的路径。
+In the target container, reuse the original job's verified cwd, Python, and module paths. The FlagScale launcher may add its own `flagscale/train` to `PYTHONPATH`, so `megatron.training.training` may not come from the Megatron-LM-FL repository. Check the actual module file only if its binding is unverified or an error occurs; do not repeat an investigation already captured in the run record. `--training-file` pins a verified path as a runtime guard. Do not guess that path from the repository name.
 
-以下变量需指向本次实际位置；`RUN_DIR` 使用独立 attempt 目录。
-`SKILL_DIR` 是安装后或源码中的本技能目录，生成器需要其相邻 assets 模板。
+Set the following variables to this attempt's actual locations. `RUN_DIR` must be a separate attempt directory. `SKILL_DIR` is this skill's installed or source directory; the generator needs the adjacent assets template.
 
 ```bash
 python "$SKILL_DIR/scripts/generate_profile_wrapper.py" \
@@ -32,20 +23,13 @@ python "$SKILL_DIR/scripts/generate_profile_wrapper.py" \
   --wait 3 --warmup 1 --active 1 --ranks 0 --level Level1
 ```
 
-生成结果为 JSON，含 wrapper 路径、完整配置和 `training_started: false`。
-生成器拒绝覆盖已有 wrapper 或原入口。生成后的 `.py` 自包含，无需再安装本技能；
-它引用的原入口、依赖和输出均为目标机绝对路径。多节点须保证每个 worker 可访问相同 wrapper 及对应路径。
-生成后可搬移 wrapper 文件，但跨机器目录不同时应在目标环境重新生成配置。
+The generator returns JSON with the wrapper path, full configuration, and `training_started: false`. It refuses to overwrite an existing wrapper or the original entrypoint. The generated `.py` is self-contained and does not require installing this skill. Its original entrypoint, dependencies, and output paths refer to absolute paths on the target machine. On multiple nodes, ensure every worker can access the same wrapper and corresponding paths. You may move the generated wrapper, but if directories differ across machines, regenerate its configuration in the target environment.
 
-支持 `--ranks 0,7` 或 `--ranks all`，这里是 **global rank**，不是物理 NPU 编号。
-默认仅 rank 0；PP、EP 或慢 rank 诊断应按证据选择代表 rank。
-设备分配、可见设备与 world size 仍由原 launcher 管理，生成器不选择或占用设备。
-`--record-shapes`、`--with-stack`、`--profile-memory` 按证据缺口启用，默认全部关闭；
-level 默认 Level1。核对当前 torch_npu 支持的 level、导出格式和开销，不为此自动升级依赖。
+`--ranks 0,7` and `--ranks all` are supported. These are **global ranks**, not physical NPU IDs. The default is rank 0 only. Select representative ranks based on evidence when diagnosing PP, EP, or a slow rank. The original launcher still manages device assignment, visible devices, and world size; the generator neither selects nor reserves devices. Enable `--record-shapes`, `--with-stack`, or `--profile-memory` only to address an evidence gap; all are off by default. The default profiler level is Level1. Check the installed torch_npu version's supported levels, export formats, and overhead without automatically upgrading dependencies.
 
-## 2. 使用专用采集配方启动
+## 2. Launch with a dedicated collection recipe
 
-复制原配方为本次 profiling attempt，替换其入口。当前 FlagScale runner 读取的配置路径是：
+Copy the original recipe for this profiling attempt and replace its entrypoint. The current FlagScale runner reads:
 
 ```yaml
 experiment:
@@ -53,67 +37,38 @@ experiment:
     entrypoint: /absolute/run-dir/train_qwen35_npu_profile.py
 ```
 
-这是配置片段，应合并到现有配方，保留 task 其他字段。
-沿当前 schema 关闭内置 profiler：核对 `use_nsys_profiler` 映射的最终 `args.profile` 为 false、
-`use_pytorch_profiler` 为 false、`pytorch_profiler_collect_chakra` 为 false。
-不同版本的 YAML 嵌套可能不同，以 resolved 配置与最终 argv 为准；不要附加 `--profile`。
-wrapper 会拒绝内置 `args.profile`、Chakra 请求及 `skip_train`，不会偷偷改变这些参数。
+This is a configuration fragment. Merge it into the existing recipe and retain the other task fields. Disable the built-in profiler under the current schema: verify that the final `args.profile` mapped from `use_nsys_profiler` is false, `use_pytorch_profiler` is false, and `pytorch_profiler_collect_chakra` is false. YAML nesting may vary by version, so inspect the resolved configuration and final argv; do not append `--profile`. The wrapper rejects built-in `args.profile`, Chakra requests, and `skip_train` rather than silently changing them.
 
-使用原 FlagScale launcher、分布式参数和模型配置启动，只更换入口及本次明确的采集/短跑范围。
-wrapper 用 `runpy.run_path(..., run_name="__main__")` 执行原入口一次，保留训练参数、
-Qwen3.5 的 provider、额外参数解析、online eval 和 tensorboard 回调；不复制它的 `pretrain(...)` 调用。
-绑定不到实际训练函数、原入口重绑 hook 或从未进入 train 时，报告错误并撤销自身补丁。
-不同训练循环、自定义 train_step 查找或一个进程多次 train 调用，需要先适配，不能宣称通用兼容。
+Launch with the original FlagScale launcher, distributed parameters, and model configuration. Change only the entrypoint and the explicit collection or short-run bounds for this attempt. The wrapper executes the original entrypoint once through `runpy.run_path(..., run_name="__main__")`, retaining training arguments, Qwen3.5 providers, extra argument parsing, online evaluation, and tensorboard callbacks. It does not copy the original `pretrain(...)` call. If it cannot bind to the actual training function, the original entrypoint rebinds a hook, or training never begins, it reports an error and removes its own patches. Other training loops, custom `train_step` lookup, or multiple `train` calls in one process require adaptation first; do not claim general compatibility.
 
-启动前沿 [共享测量契约](../../../knowledge/docs/ascend_training/measurement-and-records.md)
-核对已分配设备、时长、磁盘和本次进程的停止办法。wrapper 只限制 **采集窗口**，不限制训练总时长；
-原训练可以在窗口后继续，需由短跑配方与 launcher 保证作业在现有额度内退出。
-不因生成或首次失败而重新计算用户给定的总预算。
+Before launch, use the [shared measurement contract](../../../knowledge/docs/ascend_training/measurement-and-records.md) to check allocated devices, time, disk space, and how to stop this run's processes. The wrapper bounds only the **collection window**, not total training time. The original training may continue afterward; the short-run recipe and launcher must end the job within the existing budget. Do not reset the user's total budget after generation or a first failure.
 
-## 3. 理解窗口和返回计数
+## 3. Understand the window and return count
 
-profiler 在完成训练初始化并进入 `train` 后启动，配置 `repeat=1`。
-每次原 `train_step` **正常返回后**推进一次 `prof.step()`，保留原返回值，不改变 rerun 或跳过逻辑。
-默认 wait=3、warmup=1、active=1 对应本次 train 调用的第 1–3 次返回等待、第 4 次预热、第 5 次 active。
-至少需要 5 次正常返回才能走完默认窗口；实际采集前还应根据编译、初始化和训练稳定性选择 wait，不能把默认值当稳定保证。
+The profiler starts after training initialization, on entry into `train`, with `repeat=1`. After each **normal return** from the original `train_step`, it calls `prof.step()` once. It preserves the original return value and does not alter rerun or skip logic. With the default wait=3, warmup=1, active=1, returns 1–3 wait, return 4 warms up, and return 5 is active for this `train` call. At least five normal returns are required to complete the default window. Choose `wait` based on compilation, initialization, and training stability before actual collection; the default does not guarantee a stable interval.
 
-`train_step` 通常包含全部 microbatch、反向、优化器和学习率更新；但 overflow、rerun 或退出条件可能使
-正常返回不等于成功 optimizer update。计数相对于本次 train 调用，与恢复后的绝对 iteration 不同。
-状态中 `iteration_argument` 只记录调用实际传入的整数关键字 `iteration`；缺失时为 null，不推测编号。
-完整更新边界仍需结合训练实现、日志和 trace 验证。
+`train_step` typically includes all microbatches, backward passes, optimizer work, and learning-rate updates. However, overflow, reruns, or exit conditions can make a normal return different from a successful optimizer update. The count is relative to this `train` call, not the absolute iteration after resume. The `iteration_argument` status field records only an integer `iteration` keyword actually passed to the call; it is null if absent, and no iteration number is inferred. Verify complete update boundaries against the training implementation, logs, and trace.
 
-profiler 包围整个 train，因此相邻返回边界间可能含外层日志、评估、保存或调度。
-模板用 `ascend_train_step/N` 标记采集期间的函数体；N 为上述相对调用序号。
-不要把整个 profiler step 当作纯计算耗时，也不要把这些带 profiler 的时间用于性能选优。
+The profiler wraps all of `train`, so intervals between adjacent return boundaries may include outer logging, evaluation, checkpoint saves, or scheduling. The template labels the function body during collection as `ascend_train_step/N`; N is the relative call number above. Do not interpret a whole profiler step as pure compute time, or use profiled timings to rank training performance.
 
-到达 wait+warmup+active 后立即停止 profiler，训练继续；异常路径也执行清理并撤销自身 hook。
-`SystemExit(0/None)` 保留正常退出语义，窗口不足仍记 incomplete；非零退出、KeyboardInterrupt 或训练错误记 failed。
-原入口在 train 之后的保存/评估失败也回写入口状态。清理失败不掩盖原始训练错误。
-SIGKILL、进程崩溃或断电无法保证 finally/flush，残留 running/pending 状态必须视作未验证。
+The profiler stops immediately after wait+warmup+active while training continues. Exception paths also clean up and remove the wrapper's hooks. `SystemExit(0/None)` keeps normal exit semantics; an unfinished window is still marked incomplete. Nonzero exit, KeyboardInterrupt, or a training error is marked failed. A save or evaluation failure after `train` also updates entrypoint status. A cleanup failure does not hide the original training error. SIGKILL, process crashes, and power loss cannot guarantee `finally` or flush; a residual running/pending state must be treated as unverified.
 
-## 4. 验收产物并交给分析
+## 4. Validate artifacts and hand off for analysis
 
-每个所选 rank 新建 `$RUN_DIR/npu-profile/rank-00000/` 等目录；已存在时拒绝复用。
-其中 `trace/` 交给 `tensorboard_trace_handler`，具体下级目录、CSV、JSON 或 db 由安装版本决定。
-`wrapper-status.json` 记录实际模块/函数文件、rank/world size、schedule、返回计数、回调和入口状态。
+Each selected rank gets a new directory such as `$RUN_DIR/npu-profile/rank-00000/`. The wrapper refuses to reuse an existing one. `trace/` is passed to `tensorboard_trace_handler`; the installed version determines the subdirectories, CSV, JSON, or DB files. `wrapper-status.json` records the actual module and function files, rank/world size, schedule, return count, callback, and entrypoint status.
 
-| 状态或证据 | 含义 |
+| Status or evidence | Meaning |
 | --- | --- |
-| `collecting` / `window_complete_pending_training_end` | 仍在运行或未正常收尾，不能交付成功结论 |
-| `incomplete` | 返回次数不足或没有导出回调；即使 worker 返回 0 也未完成采集闭环 |
-| `failed` | 训练、入口或采集清理失败；已有部分文件可保留诊断 |
-| `window_complete_needs_artifact_validation` | 调度窗口结束且回调返回；仍需查真实 NPU 事件 |
-| `entrypoint_status: completed` | 整个原入口正常返回或退出码为 0；不能单独证明采集完整 |
+| `collecting` / `window_complete_pending_training_end` | Still running or not yet cleanly finished; do not report collection success |
+| `incomplete` | Too few returns or no export callback; even exit code 0 does not complete the collection |
+| `failed` | Training, entrypoint, or collection cleanup failed; partial files may help diagnosis |
+| `window_complete_needs_artifact_validation` | Scheduled window finished and callback returned; real NPU events still need validation |
+| `entrypoint_status: completed` | The full original entrypoint returned normally or exited with code 0; this alone does not prove a complete collection |
 
-对全部训练 worker 检查正常退出，对所选采集 rank 另检查上述状态和实际产物；不能只看 rank 0 打印或目录存在。
-先执行只读盘点：
+Verify normal exit for every training worker. For each selected profiling rank, also check the status above and actual artifacts. A rank 0 message or existing directory is insufficient. Start with read-only inventory:
 
 ```bash
 python "$SKILL_DIR/scripts/profile_inspect.py" inventory "$RUN_DIR/npu-profile/rank-00000/trace"
 ```
 
-出现深度/数量截断时，对实际 worker 子目录继续有界盘点。
-确认有当前 attempt 的 NPU 事件、设备映射、有效时间戳及目标完整更新；
-再从 trace/step 标记取得实际时间窗，将逐任务 CSV 交给 `profile_inspect.py window`。
-具体字段和区间口径见 [采集与分析参考](../../../knowledge/docs/ascend_profiling/collection-and-analysis.md)。缺 NPU 事件、空文件、只有汇总或窗口未命中时，
-记录限制并修正具体原因后有界重试，不能将回调次数当作产物有效性证明。
+If depth or item limits truncate inventory, continue with bounded inventory of the actual worker subdirectory. Confirm current-attempt NPU events, device mapping, valid timestamps, and a complete target update. Then get the actual time window from trace/step markers and pass the per-task CSV to `profile_inspect.py window`. See the [collection and analysis reference](../../../knowledge/docs/ascend_profiling/collection-and-analysis.md) for fields and window definitions. If NPU events are absent, files are empty, only aggregate summaries exist, or the target window is missed, record the limitation, correct its specific cause, and retry within bounds. Callback count alone does not validate an artifact.

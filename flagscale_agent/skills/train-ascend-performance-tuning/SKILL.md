@@ -1,74 +1,75 @@
 ---
 name: train-ascend-performance-tuning
-description: 优化 FlagScale 昇腾训练的容量或吞吐时使用；围绕显存、计算效率、通信开销选择或组合候选，在预算内实验、比较并复测交付。
+description: Use when optimizing FlagScale Ascend training for capacity or throughput. Choose or combine candidates across memory, compute efficiency, and communication; experiment, compare, and retest within the budget.
 ---
 
 <!-- Copyright 2026 FlagOS Contributors. SPDX-License-Identifier: Apache-2.0 -->
 
-# 昇腾训练调优
+# Ascend Training Performance Tuning
 
-主循环：`确认目标 → 基线 → 选择优化假设 → 实验比较 → 更新判断 → 复测交付`。
-每轮从显存、计算、通信三个方向考虑机会；它们相互影响，没有固定先后顺序，也不要求逐项试完。
-默认只读本文件；启动时加载一次 `train-run`，选定方法后只读对应操作。原理、约束和权衡按需查询 `know-ascend-training` 中的 `ascend_training/search-space.md`，不预加载整组 Knowledge 或全部方法。
+Core loop: `confirm the goal → establish a baseline → choose optimization hypotheses → compare experiments → update the assessment → retest and deliver`.
+Consider opportunities in memory, compute, and communication each round. They interact; there is no fixed order or requirement to exhaust each category.
+Read only this file by default. Load `train-run` once at the start, and read a method only after selecting it. For principles, constraints, or trade-offs, query `ascend_training/search-space.md` in `know-ascend-training` as needed; do not preload the entire Knowledge group or every method.
 
-## 1. 确认目标与比较条件
+## 1. Confirm the goal and comparison conditions
 
-读取用户给定的配置、命令和已有日志，沿用已确认的设备、预算与目标（容量、吞吐或约定的折中）。
-固定模型、数据及顺序、序列长度、GBS、精度、优化器数学语义和训练起点；资源规模按授权范围使用。并行布局、MBS、重计算和实现策略可以搜索，用户明确固定的项除外。
-约定预热、计时窗口、数值容差、最低收益与复测波动上限；后两者不同，不能据波动上限直接否定一次小幅加速。
-复用一份计划和实验记录，保存原配置、实际三仓路径/版本、启动 cwd/命令及每次运行的配置、日志与结果位置，保留已有修改。
-恢复会话时先核对计划、记录和自有作业；只查询进度或分析旧结果时不启动训练、不重建已完成计划。
+Read the user-provided configuration, command, and existing logs. Reuse the confirmed devices, budget, and goal (capacity, throughput, or an agreed trade-off).
+Keep the model, data and data order, sequence length, GBS, precision, optimizer math, and training starting point fixed. Use resources within the authorized scope. Parallel layout, MBS, recomputation, and implementation choices may be searched unless the user has fixed them.
+Agree on warmup, timing window, numerical tolerance, minimum gain, and maximum retest variation. The last two are distinct: a small gain is not automatically invalid just because it falls below the variation limit.
+Reuse one plan and experiment record. Preserve the original configuration; the actual paths and versions of all three repositories; the launch cwd and command; and each run's configuration, logs, and result location. Preserve existing modifications.
+When resuming a session, first inspect the plan, record, and owned jobs. Do not start training or recreate a completed plan when only checking progress or analyzing existing results.
 
-## 2. 建立基线
+## 2. Establish a baseline
 
-首次训练调用 `load_skill(name="train-run")`，选择 Ascend 分支；统一使用 `flagscale train -c /absolute/path/to/config.yaml`，文件名不限。
-符合条件的单机短跑按该技能的 [单次有界执行](../train-run/references/single-run.md) 启动和等待；其他场景沿用其 CLI 路径。
-复用已确认的环境和同条件有效基线；基线短跑就是本次验证，不额外插入单卡 smoke。
-检查完整更新、loss/梯度健康、跳步/NaN、稳定计时和 worker 退出证据；能直接取得的峰值显存一并记录，缺失项保持未知。
-基线 OOM 时按失败阶段进入显存方向，先取得可行配置；其他启动或测量故障先修复。原始 OOM 配置只作容量对照，不计算加速比。
-修复涉及数据处理、数值路径或框架实现变化时，记录差异并重新建立同条件基线；收益相对该基线计算，训练语义等价性未验证时明确说明。
-单次期限由 launcher 控制；等待超时不等于训练停止，下一次运行前确认全部自有 worker 退出。
+For the first training run, call `load_skill(name="train-run")` and select its Ascend path. Always launch with `flagscale train -c /absolute/path/to/config.yaml`; the file may have any name.
+For an eligible bounded single-node run, use that skill's [bounded single run](../train-run/references/single-run.md) instructions to launch and wait. Otherwise follow its CLI path.
+Reuse a confirmed environment and a valid baseline under the same conditions. The baseline short run serves as validation; do not add a separate single-device smoke test.
+Check complete updates, loss/gradient health, skipped steps or NaNs, stable timing, and evidence that workers exited. Record peak memory if directly available; leave unavailable metrics unknown.
+If the baseline OOMs, use the failure stage to pursue memory capacity and first find a feasible configuration. Fix other launch or measurement failures before tuning. Use the original OOM configuration only as a capacity reference; do not calculate a speedup against it.
+If a repair changes data processing, the numerical path, or framework implementation, record the difference and establish a new comparable baseline. Calculate gains against that baseline and explicitly state when training-semantic equivalence has not been verified.
+The launcher enforces the per-run deadline. A wait timeout does not mean training stopped; confirm that all owned workers exited before the next run.
 
-## 3. 选择方向并生成候选
+## 3. Choose directions and generate candidates
 
-首次选候选时，结合三个方向与已有证据，尽量提出并在现有实验记录中保留 3 个作用机制不同、值得验证的优化假设；仅枚举不同 MBS 值不算机制不同的假设。3 个是默认起点，证据或可行方法不足时可更少，预算充足时可更多；不要求每类一个或逐项运行。
-每项简记 `标识 / 假设 / 支持与反对证据 / 下一实验及预期观察 / 状态（待试、探索中、暂缓、结束）`，候选和结果关联其标识。只在选择实验或获得关键结果时更新受影响的项，保留未试的替代方向，不另建记录系统或重复分析报告。
-三个方向用于判断优化目标；methods 按具体调整手段组织，同一方法可服务多个方向，选中后只读相关方法。下表是候选提示，不是白名单或固定顺序。
+When selecting candidates for the first time, use evidence across all three directions to propose and retain, where possible, three worthwhile hypotheses with different mechanisms in the existing experiment record. Different MBS values alone do not count as different mechanisms. Three is a default starting point: use fewer if evidence or feasible methods are lacking, or more if the budget allows. There is no need to choose one per category or run every candidate.
+For each hypothesis, briefly record `id / hypothesis / supporting and opposing evidence / next experiment and expected observation / status (pending, exploring, deferred, closed)`. Link candidates and results to that ID. Update affected entries only when selecting an experiment or receiving a key result. Keep untried alternatives without creating another record system or duplicate analysis reports.
+The three directions describe optimization goals; methods are organized by the concrete adjustment. A method can serve several goals. Read only relevant methods after selecting them. This table suggests candidates; it is not an allowlist or a fixed order.
 
-| 方向 | 观察什么 | 已知可尝试的点与操作入口 |
+| Direction | What to observe | Known options and procedure |
 | --- | --- | --- |
-| 显存 | OOM 阶段、最重 rank 峰值、常驻状态与激活占用、可用余量 | [MBS](methods/micro-batch.md)、[激活保存/重计算/卸载](methods/recompute.md)、[并行布局与状态分片](methods/parallelism.md)；有碎片证据时按需读[分配器设置](references/allocator.md) |
-| 计算效率 | 完整更新耗时、重复计算、小算子/下发与数据等待、流水线空泡和负载偏斜 | [MBS](methods/micro-batch.md)、[减少重计算](methods/recompute.md)、[数据与 Host 调度](methods/data-and-host.md)、[图捕获与编译](methods/graph-execution.md)、[PP/VPP 与层分配](methods/parallelism.md)、[算子与后端选择/实现](methods/operator.md) |
-| 通信开销 | 关键路径上的通信等待、rank 偏斜、通信组与节点内/间拓扑 | [梯度同步/参数 gather/P2P 重叠与 bucket](methods/communication.md)、[并行度/通信组映射/调度](methods/parallelism.md) |
+| Memory | OOM stage, peak memory on the most loaded rank, persistent state and activations, available headroom | [MBS](methods/micro-batch.md), [activation storage/recomputation/offload](methods/recompute.md), [parallel layout and state sharding](methods/parallelism.md); read [allocator settings](references/allocator.md) only with evidence of fragmentation |
+| Compute efficiency | Complete-update time, repeated compute, small operations/dispatch and data stalls, pipeline bubbles, load imbalance | [MBS](methods/micro-batch.md), [reduce recomputation](methods/recompute.md), [data and Host scheduling](methods/data-and-host.md), [graph capture and compilation](methods/graph-execution.md), [PP/VPP and layer assignment](methods/parallelism.md), [operator and backend selection/implementation](methods/operator.md) |
+| Communication overhead | Communication waits on the critical path, rank skew, communication groups and intra-/inter-node topology | [gradient synchronization/parameter gather/P2P overlap and buckets](methods/communication.md), [parallel degrees/group mapping/scheduling](methods/parallelism.md) |
 
-选择下一实验时，写明要验证或区分哪些假设、什么观测会支持或削弱它们；按潜在收益、能否改变当前判断、证据强弱和实验成本排序。已有证据足够时直接试配置，避免只围绕首个猜测反复搜集印证材料。
-原因不清、结果反常或下一项成本高时，按需加载 `train-ascend-profiling` 采集能回答该问题的最小 trace，性能计时另做无 profiler 运行。
-预算紧时优先便宜且能区分假设的候选；预算充足时扩大布局和参数范围、尝试其他方向与组合，并给尚不确定但有合理依据的方向留出试验机会。预留最终复测时间，时间不足时交付已验证结果。
-允许提出表外方法；说明作用机制、预期收益与代价、当前实现支持及验证办法即可。搜索范围仍受用户目标、资源和允许修改范围约束。
-可以从当前最佳配置或有价值的其他父配置出发。所有 method 只补充候选操作和特有检查，共用以下约定：
+When choosing the next experiment, state which hypotheses it should test or distinguish and what observations would support or weaken them. Rank options by potential gain, ability to change the current assessment, evidence strength, and experiment cost. If the evidence is sufficient, test the configuration directly instead of repeatedly gathering confirmation for the first guess.
+When the cause is unclear, a result is unexpected, or the next experiment is costly, load `train-ascend-profiling` as needed and collect the smallest trace that answers the question. Measure performance in a separate run without a profiler.
+With a tight budget, favor cheap experiments that distinguish hypotheses. With more time, broaden layout and parameter ranges, test other directions and combinations, and leave room for plausible but uncertain options. Reserve time for the final retest; if time runs out, deliver the verified result.
+You may propose options outside the table. State their mechanism, expected benefit and cost, current implementation support, and verification approach. The user's goal, resources, and allowed modification scope still bound the search.
+Start from the current best configuration or another useful parent configuration. Every method adds only candidate actions and special checks; the following rules are shared:
 
-- 候选记为 `parent / hypothesis / change / checks`；change 写配置差异或拟改的文件/函数，checks 写可复用证据和必要补测，关联已有假设。
-- 选中后复制独立 YAML，通过 `-c` 选择，保持依赖与相对路径有效；代码修改在授权范围内实施最小补丁，保存父版本、完整差异和实际使用的配置/补丁，保留用户修改。
-- 启动、等待、比较和采纳统一走第 4–5 节；方法只附加生效证据、特有指标和异常解释，不各自维护运行或回退流程。
-单项试验便于归因；有明确依赖或跨方向权衡时可联合变更，如“重计算腾出显存 + 增大 MBS”，不要求每个开关单独提速。保存完整差异，联合结果不归因于单个开关。
-启动前核对所选方法的整数/调度约束和实际生效配置；布局或状态分片变化时补齐其恢复与数值检查。仅对当前候选缺少的能力查对应知识或源码，复用已确认的结论。
+- Record a candidate as `parent / hypothesis / change / checks`. Express `change` as a configuration diff or proposed file/function edit; list reusable evidence and necessary follow-up checks under `checks`; link it to an existing hypothesis.
+- After selection, copy a separate YAML and select it with `-c`, keeping dependencies and relative paths valid. For authorized code changes, make the smallest patch, preserve the parent version and full diff, and record the actual configuration/patch used. Preserve user changes.
+- Use sections 4–5 for launch, wait, comparison, and adoption. A method only adds proof that it took effect, special metrics, and explanations for anomalies; it does not maintain a separate run or rollback process.
 
-## 4. 实验、比较并更新搜索
+Single-change experiments make attribution easier. Combine changes when there is a clear dependency or cross-direction trade-off, such as "recomputation frees memory + larger MBS"; each switch need not improve speed by itself. Preserve the full diff and do not attribute the combined result to one switch.
+Before launch, check the selected method's integer and scheduling constraints and the effective configuration. For changes to layout or state sharding, add their restore and numerical checks. Look up Knowledge or source only for capabilities still unknown for this candidate; reuse confirmed findings.
 
-一次只运行一个候选，沿用 `train-run` 与比较条件，执行该方法要求的生效路径和质量检查。目标参数未生效或配置组合非法时，标记为无效实验并先修正配置，不进入收益比较，也不算否决该方向。
-对支持的 Megatron 日志调用 `analyze_training_results`：提供准确的 loss rank 日志和已有的 `exit_code_path`，使用 `log_interval=1`，明确 iteration 范围、warmup_steps、GBS、sequence_length、loss 容差及 JSON `output_path`。
-一次比较包含一个有效基线和一个固定候选；用工具摘要和落盘 JSON，字段不清楚时再读[结果分析流程](references/result-analysis.md)，异常时再读详细日志。`status="ok"` 只表示解析成功。
-比较完整更新耗时/吞吐、峰值显存及质量，记录配置差异、证据路径与保留/回退理由；缺失指标不能当作通过。
-将实际结果与预期观察对照，更新相关假设的支持/反对证据、适用配置范围和下一实验；结果不清就保持未决，多个假设可以同时成立。
-保留目标下最好的已验证配置，也可暂留“较慢但省显存”等有利于后续组合的配置。比较当前分支与尚未探索的假设，再决定继续、组合或切换。
-重复尝试无收益且无新证据、关键预期被反驳，或下一步成本已不值得时，注明原因并暂缓该分支，从其余假设重选；不固定失败次数。切换时从明确的父配置生成候选，不夹带失败变更；有新证据或组合条件变化时可重新开启。
-OOM、无收益只收缩已验证的条件范围；改变布局、重计算或缓冲后可重新探索 MBS。质量失败拒绝当前候选，能力未知与运行失败分开记录；不把单次失败推广为整个方向不支持。
-预算不足以完成下一实验与必要复测、目标已达成，或剩余假设的预期价值不足时停止；记录未覆盖方向，不声称找到全局最优。
+## 4. Experiment, compare, and update the search
 
-## 5. 复测并交付
+Run one candidate at a time under the same comparison conditions using `train-run`, including the method's effective-path and quality checks. If a target setting did not take effect or a combination is invalid, mark it as an invalid experiment and fix the configuration first. Do not include it in the benefit comparison or treat it as a rejection of the direction.
+For supported Megatron logs, call `analyze_training_results` with the correct loss-rank log and existing `exit_code_path`; set `log_interval=1` and specify the iteration range, warmup_steps, GBS, sequence_length, loss tolerance, and JSON `output_path`.
+Each comparison uses one valid baseline and one fixed candidate. Use the tool summary and saved JSON; read the [result analysis procedure](references/result-analysis.md) if fields are unclear and detailed logs only for anomalies. `status="ok"` means only that parsing succeeded.
+Compare complete-update time/throughput, peak memory, and quality. Record the configuration diff, evidence paths, and reason to keep or revert. Missing metrics are not passes.
+Compare actual results with expected observations. Update the relevant hypotheses' supporting/opposing evidence, applicable configuration range, and next experiment. Leave an unclear result unresolved; multiple hypotheses can hold at once.
+Keep the best verified configuration for the goal. You may also retain useful configurations such as one that is slower but saves memory for later combinations. Compare the current branch with unexplored hypotheses, then decide whether to continue, combine, or switch.
+If repeated attempts produce neither gain nor new evidence, a key prediction is refuted, or the next step is not worth its cost, record why and defer that branch. Select again from the remaining hypotheses; do not fix a number of failures. When switching, derive the candidate from an explicit parent configuration without carrying over failed changes. Reopen a branch if new evidence or combination conditions warrant it.
+OOM or lack of gain narrows only the tested conditions. You may revisit MBS after changing layout, recomputation, or buffers. Reject the current candidate on quality failure; record unknown capability separately from run failure. Do not generalize one failure to an entire direction.
+Stop when the budget cannot cover another experiment plus required retests, the goal is met, or remaining hypotheses have insufficient expected value. Record unexplored directions; do not claim a global optimum.
 
-吞吐目标没有更优候选时交付原基线和已测结果。容量目标按约定的可行性、峰值和允许的速度代价验收；原基线 OOM 时仅复测可行候选，不重复失败基线或计算加速比。
-最终吞吐候选默认做三对独立复测：六份新请求各用独立 YAML、run_id 和 exp_dir，初测不计入。单机有界路径用 `shell(background=True)` 执行以下循环，按 `train-run` 等待；次数另有约定时调整列表：
+## 5. Retest and deliver
+
+For a throughput goal with no better candidate, deliver the original baseline and tested results. For a capacity goal, apply the agreed feasibility, peak-memory, and acceptable-speed-cost criteria. If the original baseline OOMed, retest only feasible candidates; do not rerun the failed baseline or calculate a speedup against it.
+For the final throughput candidate, default to three pairs of independent retests: six fresh requests, each with a separate YAML, run_id, and exp_dir. The initial trials do not count. On the bounded single-node path, run the loop below with `shell(background=True)` and wait according to `train-run`. Adjust the list if a different count was agreed:
 
 ```bash
 RETEST_REQUEST_DIR=/absolute/path/to/retest-requests
@@ -78,7 +79,7 @@ for run in pair1-baseline pair1-candidate pair2-candidate pair2-baseline pair3-b
 done
 ```
 
-最终只比较这些新运行，按实际顺序提供日志及退出码；其他启动后端按相同次数逐次运行。按约定质量、收益和波动要求验收，预算不足或证据缺失则标记待验证。
-交付最佳已验证配置、`flagscale train -c ...` 复现命令、实验记录和简短结论：采用哪些变更、三方面收益与代价、质量证据、探索范围与未验证项。
-性能数字直接引用同一最终分析摘要，不混用统计口径；mock data 注明模型、序列长度和合成数据范围。短跑 loss 健康不代表更新等价或长期收敛。
-保留原配置与未采纳候选的理由；完成当前计划并附证据，一次核对报告后结束。
+Compare only these fresh runs, passing logs and exit codes in their actual order. For other launch backends, run the same number of trials sequentially. Accept according to the agreed quality, gain, and variation criteria; mark the result pending verification if the budget or evidence is insufficient.
+Deliver the best verified configuration, a reproducible `flagscale train -c ...` command, the experiment record, and a concise conclusion: adopted changes, gains and costs across the three directions, quality evidence, search scope, and unverified items.
+Quote performance figures from the same final analysis summary without mixing measurement conventions. For mock data, state the model, sequence length, and synthetic-data scope. Healthy loss in a short run does not establish update equivalence or long-term convergence.
+Keep the original configuration and reasons for rejecting candidates. Complete the current plan, attach evidence, review the report once, and finish.

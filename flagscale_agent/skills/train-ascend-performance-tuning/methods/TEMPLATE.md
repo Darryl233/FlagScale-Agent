@@ -1,17 +1,17 @@
 <!-- Copyright 2026 FlagOS Contributors. SPDX-License-Identifier: Apache-2.0 -->
 
-# 调优方法模板
+# Tuning Method Template
 
-只在接入新方法时读取。按具体调整对象或手段划定职责；已有方法能承接时直接扩展。候选记录、补丁保存、启动、比较和采纳由主流程负责，不在这里重复。
+Read this only when adding a method. Scope it by the object or mechanism being changed; extend an existing method when it already covers the work. The main workflow handles candidate records, patch preservation, launches, comparisons, and adoption. Do not repeat those steps here.
 
-## 适用条件
+## When to use
 
-说明适用证据、当前版本/后端前提，以及可能影响的显存、计算和通信代价。原理与约束按需引用 Knowledge。
+State supporting evidence, version/backend requirements, and possible memory, compute, and communication costs. Link to Knowledge for principles and constraints as needed.
 
-## 生成候选
+## Generate candidates
 
-给出从父配置/代码生成候选的具体字段、路径或函数操作，注明必要联动和探索空间。不能只列参数名或“尝试更优配置”，也不要求所有开关逐项独立提速。
+Specify fields, paths, or functions to change in the parent configuration/code, required coupled changes, and room for exploration. Do more than list parameter names or say "try a better configuration." Do not require every switch to improve performance independently.
 
-## 额外检查
+## Additional checks
 
-只列本方法特有的合法性、生效路径和质量检查，以及必要的结果解释。例如跨布局按真实分片对齐，算子实现比较公共接口前后向，图模式区分准备与 replay 成本。
+Include only method-specific validity, activation-path, and quality checks, plus any necessary result interpretation. For example, align real shards when comparing layouts; compare an operator's public forward and backward interfaces; separate graph preparation from replay cost.

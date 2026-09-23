@@ -1,34 +1,34 @@
 <!-- Copyright 2026 FlagOS Contributors. SPDX-License-Identifier: Apache-2.0 -->
 
-# 通信调度与重叠
+# Communication Scheduling and Overlap
 
-## 适用条件
+## When to use
 
-已有配置、日志或 profile 支持通信等待、额外 buffer 或 overlap 退化的假设时进入；廉价配置对照不要求先采完整 profile。
-参数依赖按需读 `know-ascend-training` 的 `ascend_training/communication.md`，涉及重放时读 `ascend_training/recompute.md`，涉及图执行时读 `ascend_training/graph-execution.md`。
+Use this method when configuration, logs, or a profile support a hypothesis about communication waits, extra buffers, or degraded overlap. A cheap configuration comparison does not require a full profile first.
+For parameter dependencies, read `know-ascend-training`: `ascend_training/communication.md` as needed. For recomputation, read `ascend_training/recompute.md`; for graph execution, read `ascend_training/graph-execution.md`.
 
-## 生成候选
+## Generate candidates
 
-从父配方的已生效配置出发，选择与证据对应的操作，写明预期减少什么等待或内存：
+Start from the parent recipe's effective configuration. Choose an operation supported by evidence and state which wait or memory cost it should reduce:
 
-| 方向 | 具体操作 |
+| Direction | Concrete operation |
 | --- | --- |
-| DP 梯度同步 / 参数 gather | 在已满足本版 optimizer 依赖的配置上，对照 `overlap_grad_reduce` 或 `overlap_param_gather` 的开/关状态。单独比较 gather 时保留梯度同步重叠；关闭梯度同步重叠时，联动关闭依赖它的 gather 重叠，记录联合变更。 |
-| 梯度 bucket | 取得当前有效字段、值和单位，按假设生成一个更小或更大的邻近值；固定其余通信配置，比较完整更新耗时与峰值显存。 |
-| PP P2P | 当前 PP/VPP 调度允许时，用 `train.system.no_overlap_p2p_communication: true` 关闭；启用对照则移除该禁用项或设为 `false`。内部生效字段是 `overlap_p2p_comm`，不要把它直接添加为 YAML 开关。某一状态不合法时不直接切换，布局联动按 [并行方法](parallelism.md)。 |
-| MoE dispatcher / overlap | 从当前已接入的实现中，选择一个 dispatcher 替换或 dispatch/combine、shared-expert overlap 对照；保持 routing、top-k、容量和丢 token 语义，记录必要联动。 |
+| DP gradient synchronization / parameter gather | Where this optimizer version's dependencies are met, compare enabled and disabled `overlap_grad_reduce` or `overlap_param_gather`. Keep gradient synchronization overlap enabled when isolating gather. When disabling gradient synchronization overlap, also disable gather overlap if it depends on it, and record the coupled change. |
+| Gradient buckets | Identify the effective field, value, and unit. Generate one nearby smaller or larger value based on the hypothesis. Keep other communication settings fixed; compare full-update time and peak memory. |
+| PP P2P | If the current PP/VPP schedule permits it, disable with `train.system.no_overlap_p2p_communication: true`. For an enabled comparison, remove this disabling field or set it to `false`. The internal effective field is `overlap_p2p_comm`; do not add it directly as a YAML switch. If either state is invalid, do not flip it in isolation. Handle layout dependencies through the [parallelism method](parallelism.md). |
+| MoE dispatcher / overlap | Choose one dispatcher replacement or dispatch/combine or shared-expert overlap comparison among implementations already integrated in this stack. Preserve routing, top-k, capacity, and token-dropping semantics; record required coupled changes. |
 
-以上是常用起点，不限定搜索范围或顺序。有证据表明通信是瓶颈或值得优化时，可以按预算开展更深入、全面的调查：
-沿相关通信链路检查消息大小与调用次数、rank 负载与拓扑、计算通信依赖和缓冲生命周期，必要时扩展到跨模块、跨 rank 的关联分析。
-据此探索通信合并/分块、TP/CP/EP 布局与映射、dispatch/combine 数据流，以及更深的通信调度或后端实现优化，无需先试完表中方向。
-布局变更衔接 [并行方法](parallelism.md)，算子实现变更衔接 [算子方法](operator.md)；源码修改仍须在任务授权范围内。
+These are starting points, not limits on search scope or order. When evidence points to communication as a bottleneck or opportunity, use the available budget for deeper investigation:
+Examine message sizes and call counts, rank load and topology, compute/communication dependencies, and buffer lifetimes along the relevant communication path. Extend analysis across modules and ranks if needed.
+Use the findings to explore communication coalescing/chunking, TP/CP/EP layouts and mapping, dispatch/combine data flow, or deeper scheduling and backend changes. The table need not be exhausted first.
+For layout changes, use the [parallelism method](parallelism.md); for operator implementation changes, use the [operator method](operator.md). Source changes must remain within the task's authorization.
 
-复用已确认的参数映射与依赖，只补查当前候选缺少的条件；字段被拒绝、改写或生效证据缺失时再定位对应消费者。
+Reuse confirmed parameter mappings and dependencies; investigate only conditions missing for the current candidate. Inspect the corresponding consumer if a field is rejected, rewritten, or lacks evidence of taking effect.
 
-## 额外检查
+## Additional checks
 
-- **普通配置调整**：核对目标参数实际生效、bucket 单位及该变更的必要依赖；复用已验证的分组、optimizer 与调度条件。
-- **改变分组、dispatcher 或调度**：补查受影响 rank 的通信顺序、梯度归约/累积及缓冲生命周期；涉及 delayed wgrad 时，确认梯度在归约和 optimizer 消费前完成。仅调整 bucket 不要求重新调查全部调度与图模式。
-- **效果异常或机制未明**：按需采集能区分当前假设的时间线；开关为 true 或入口被调用不证明实际重叠。诊断运行与无 profiler 性能测量分开。
+- **Ordinary configuration changes:** Confirm the target parameter takes effect, the bucket unit, and dependencies required by this change. Reuse validated group, optimizer, and schedule conditions.
+- **Group, dispatcher, or schedule changes:** Check communication order, gradient reduction/accumulation, and buffer lifetimes on affected ranks. With delayed wgrad, confirm gradients complete before reduction and optimizer consumption. A bucket-only adjustment does not require rechecking the entire schedule and graph mode.
+- **Unexpected results or unclear mechanism:** Collect a timeline only as needed to distinguish the current hypotheses. A configuration flag set to `true` or a called entrypoint does not prove actual overlap. Keep diagnostic runs separate from profiler-free performance measurements.
 
-无时间线证据时可以报告端到端收益，但不能声称已证明通信等待减少。布局、负载或实现问题的证据用于下一候选。
+Without timeline evidence, report end-to-end gains without claiming reduced communication wait was proven. Use evidence about layout, load, or implementation for the next candidate.

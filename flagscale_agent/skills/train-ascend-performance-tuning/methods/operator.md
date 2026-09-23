@@ -1,36 +1,36 @@
 <!-- Copyright 2026 FlagOS Contributors. SPDX-License-Identifier: Apache-2.0 -->
 
-# 算子与后端选择、接入及实现优化
+# Operator and Backend Selection, Integration, and Implementation
 
-## 适用条件
+## When to use
 
-已有配置、日志、profile 或最小复现支持具体算子/后端的优化假设时进入。可以只切换已接入实现；新增接入或修改代码须在任务授权范围内，只要求诊断时返回诊断即可。
-复用实际调用、shape/dtype/stride、相关 rank/stage 和后端证据，只追踪尚不明确的调用边界，不要求遍历所有仓库。
-接口与完整调用成本按需读 `know-ascend-operators` 的 `ascend_operators/operator-optimization.md`；修改设备 kernel 时再读 `ascend_operators/kernel-experiments.md`。
-按目标算子组织候选；已有实现的配置选择与新增接入均在这里处理，图捕获/编译边界调整另按 [图与编译方法](graph-execution.md)。
+Use this method when configuration, logs, a profile, or a minimal reproduction supports a hypothesis about a specific operator or backend. Switching an integrated implementation may be enough. New integration or code changes must be within the task's authorization; if only diagnosis was requested, return the diagnosis.
+Reuse evidence about the actual call, shape/dtype/stride, relevant rank/stage, and backend. Trace only call boundaries still unclear; do not search every repository.
+For interfaces and full-call costs, read `know-ascend-operators`: `ascend_operators/operator-optimization.md` as needed. Read `ascend_operators/kernel-experiments.md` when changing a device kernel.
+Organize candidates by target operator. Both configuration selection among integrated implementations and new integration belong here; for graph capture or compilation boundaries, use the [graph and compilation method](graph-execution.md).
 
-## 生成候选
+## Generate candidates
 
-从训练实际使用的公共调用出发，选择与证据对应的操作，指出待修改的配置项或文件/函数、预期收益与主要代价：
+Start from the public call actually used in training. Choose an operation supported by evidence and identify the configuration field or file/function to change, expected gain, and main cost:
 
-| 方向 | 具体操作 |
+| Direction | Concrete operation |
 | --- | --- |
-| 已接入后端/融合 | 用当前入口已支持的按算子选择字段或融合开关，只替换目标调用及必要的前后向联动；TE-FL 可按已确认的映射调整 `train.model.te_fl_per_op`，候选写出具体 op 与当前已注册实现，保留其余项。未接入实现按下一行处理，不靠改 `swiglu`、norm 类型等模型定义获得“融合收益”。 |
-| 接入已有 NPU 算子 | 在当前 adapter/override 中替换对应实现，补齐参数、输出和训练反向映射；TE-FL 算子通过对应 NPU backend 的注册项接入。已有 RMSNorm 的 `rmsnorm_fwd/rmsnorm_bwd` 对接 `torch_npu.npu_rms_norm/npu_rms_norm_backward` 是适配实例，先确认热点当前绑定，不重复接入已生效路径。 |
-| 消除重复转换与临时张量 | 在公共调用内定位重复的 `.contiguous()`、`.to()`、`clone()` 或 copy；仅在原 stride/dtype、别名及反向保存值允许时删除、合并或推迟操作。可复用的中间量限于输入有效的生命周期，不跨更新缓存变化的权重或激活。 |
-| 减少 Host 往返与同步 | 定位热路径的 `.item()`、`.cpu()`、`.tolist()`、显式同步或逐次日志；将仅用于观测的操作移出热点，数据计算在支持时改为设备张量操作。只有依赖证据证明冗余时才移除同步或 `empty_cache()`。 |
-| 融合与算法改写 | 将已定位的逐元素/归约链，或 MoE 排列与反排列中的重排链，替换为当前可用的融合公共接口；没有兼容实现时才考虑局部 kernel。保留稳定归约、索引/概率语义和反向；把新引入的输入整理、辅助张量和输出恢复计入候选。 |
-| Triton 分块与任务划分 | 修改目标 kernel 已有的 `BLOCK_SIZE`、`BLOCK_M/N/K` 等实际形参及关联 grid/循环；小任务下发突出时比较核内跨步处理多个 tile，资源超限时缩小 tile 或缩短中间量存活期。有必要且当前版本支持时，用少量 `triton.Config` 配合 `triton.autotune` 比较合法配置，grid 随候选变化。 |
-| Ascend C 搬运计算流水 | 在目标实现的 `CopyIn/Compute/CopyOut` 分块循环中比较单缓冲与双缓冲；使用 `TPipe.InitBuffer(queue, num, len)` 时联动修改缓冲数、tile 长度和循环覆盖，保留队列依赖及尾块处理，不只把缓冲数改为 2。 |
+| Integrated backend/fusion | Use a per-operator selection field or fusion switch supported by the current entrypoint. Replace only the target call and required forward/backward coupling. For TE-FL, adjust `train.model.te_fl_per_op` according to a confirmed mapping; name the exact op and currently registered implementation, and leave other entries unchanged. Treat an unintegrated implementation as the next row, not as a reason to alter model definitions such as `swiglu` or norm type for a "fusion gain." |
+| Integrate an existing NPU operator | Replace the corresponding implementation in the current adapter/override and map parameters, outputs, and training backward behavior. Integrate TE-FL operators through the corresponding NPU backend registration. Connecting existing RMSNorm `rmsnorm_fwd/rmsnorm_bwd` to `torch_npu.npu_rms_norm/npu_rms_norm_backward` is an adaptation example; first confirm the hot path's current binding and do not integrate a path already active. |
+| Remove repeated conversions and temporary tensors | Locate repeated `.contiguous()`, `.to()`, `clone()`, or copy operations inside the public call. Remove, combine, or defer them only when original stride/dtype, aliasing, and backward-saved values permit it. Reuse intermediates only within their valid input lifetime; do not cache changing weights or activations across updates. |
+| Reduce host round trips and synchronization | Locate hot-path `.item()`, `.cpu()`, `.tolist()`, explicit synchronization, or per-call logging. Move observation-only work out of the hot path and keep computation on device tensors where supported. Remove synchronization or `empty_cache()` only when dependency evidence shows it is redundant. |
+| Fusion and algorithm changes | Replace an identified elementwise/reduction chain, or reorder chain in MoE permutation/unpermutation, with an available fused public interface. Consider a local kernel only when no compatible implementation exists. Preserve stable reductions, indexing/probability semantics, and backward behavior. Include new input preparation, auxiliary tensors, and output restoration in the candidate cost. |
+| Triton tiling and task assignment | Change actual target-kernel parameters such as `BLOCK_SIZE` or `BLOCK_M/N/K` and the associated grid/loops. When dispatch overhead dominates small tasks, compare processing multiple tiles with in-kernel strides. If resources exceed limits, shrink tiles or shorten intermediate lifetimes. If needed and supported by the current version, compare a small set of valid `triton.Config` choices through `triton.autotune`, updating the grid for each candidate. |
+| Ascend C transfer/compute pipeline | In the target implementation's tiled `CopyIn/Compute/CopyOut` loop, compare single and double buffering. When using `TPipe.InitBuffer(queue, num, len)`, update buffer count, tile length, and loop coverage together. Preserve queue dependencies and tail-tile handling; changing only the buffer count to 2 is insufficient. |
 
-以上是常用起点，不限定搜索范围或顺序。有关键路径证据且预算允许时，可进一步调查算法、跨算子中间量、布局、内存生命周期或底层指令流水；将调查落实为具体修改候选，不扩大到无关的全局分派重写或依赖升级。
+These are starting points, not limits on scope or order. With critical-path evidence and budget, investigate algorithms, cross-operator intermediates, layouts, memory lifetimes, or instruction pipelines. Turn findings into concrete candidates without expanding into unrelated global dispatch rewrites or dependency upgrades.
 
-## 额外检查
+## Additional checks
 
-- **已有实现切换**：确认目标公共调用实际绑定候选、前后向和 shape/mask 支持；复用已有接口证据，通用质量检查沿用主循环。配置为 true 不证明生效。
-- **实现变更的接口正确性**：优先复用现有公共 API 测试及参考实现，补足本次变化涉及的生产形状与边界；比较前向及全部可微输入的反向，覆盖受影响的 dtype/device/shape、stride、索引、返回值和 fallback 行为。沿用项目容差，正确性失败不进入性能比较。
-- **接入生效**：确认训练公共调用确实绑定候选；直接调用 vendor/private kernel 成功不能替代此证据。仅修改 kernel 时复用既有接入结论。
-- **局部性能**：按需复用微基准，分别解释 kernel 与完整公共调用成本，计时包含必要设备完成等待。仅在原因不明时补充 `msprof op` 等算子分析；沿用当前工具版本，性能测量与诊断采集分开。
-- **有副作用的基准**：autotune 或重复微基准可能多次执行 inplace、原子累加或状态更新；每个候选/重复测量按原初态恢复被修改的缓冲，避免把累积后的输入当作下一次参照。
+- **Switching an integrated implementation:** Confirm that the target public call binds to the candidate and supports forward/backward and required shapes/masks. Reuse existing interface evidence; use the main loop's general quality checks. A configuration flag set to `true` does not prove the candidate took effect.
+- **Interface correctness after an implementation change:** Prefer existing public API tests and reference implementations; cover production shapes and boundaries affected by this change. Compare forward and backward for every differentiable input, including affected dtype/device/shape, stride, indices, returns, and fallback behavior. Use project tolerances. A correctness failure excludes performance comparison.
+- **Integration activation:** Confirm that the training public call actually binds to the candidate. Successfully calling a vendor/private kernel directly is not equivalent evidence. Reuse the existing integration conclusion when changing only the kernel.
+- **Local performance:** Reuse microbenchmarks as needed. Explain kernel and full public-call costs separately; timing must include necessary device completion. Add operator analysis such as `msprof op` only if the reason is unclear. Use the current tool version and keep diagnostic collection separate from performance measurement.
+- **Benchmarks with side effects:** Autotuning or repeated microbenchmarks may execute inplace, atomic accumulation, or state updates multiple times. Restore modified buffers to the original state for each candidate/repetition so accumulated inputs do not become the next reference.
 
-接口通过而训练无收益时，结合关键路径及新增转换成本解释。功能修复后按主流程重建正确基线；仅算子任务可交付公共接口和局部性能，训练收益保持未验证。
+If interfaces pass but training shows no gain, explain it using critical-path evidence and added conversion costs. After a functional fix, rebuild the correct baseline through the main workflow. An operator-only task may deliver public-interface and local-performance results while leaving training gain unverified.

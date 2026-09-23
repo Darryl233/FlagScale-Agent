@@ -14,9 +14,9 @@
  limitations under the License.
  -->
 
-# 昇腾训练调优
+# Ascend Training Performance Tuning
 
-确认目标 → 基线 → 保留不同机制的假设 → 选择有区分价值的实验 → 按证据继续、组合或切换 → 复测交付。
-从显存、计算、通信选择已知方法或新假设，默认争取 3 个不同机制的假设，按证据和预算增减；预期观察与支持/反对证据记入现有实验记录，按收益、信息价值和成本选择，不固定搜索顺序或失败次数。
-主流程只保留决策与实验闭环；启动按需复用 `train-run` 的 Ascend 分支，方法按批量、并行与状态分片、重计算与卸载、通信调度、数据与 Host、图与编译、算子与后端组织，同一方法可服务多个目标；方法和 Knowledge 只在选中或有疑问时加载。
-固定工作负载与质量要求，保留最佳已验证配置及有价值的显存/速度折中，交付可复现结果并注明验证范围。
+Confirm the goal → establish a baseline → retain hypotheses with different mechanisms → choose experiments that distinguish them → continue, combine, or switch based on evidence → retest and deliver.
+Consider known methods and new hypotheses across memory, compute, and communication. Aim for three different mechanisms by default, adjusting for evidence and budget. Record expected observations and supporting/opposing evidence in the existing experiment record. Choose by potential gain, information value, and cost, without a fixed search order or failure count.
+The main workflow holds the decision and experiment loop. Reuse the Ascend path in `train-run` for launches. Methods cover batch size, parallelism and state sharding, recomputation and offload, communication scheduling, data and Host, graphs and compilation, and operators and backends; a method may serve several goals. Load methods and Knowledge only when selected or needed to resolve a question.
+Keep the workload and quality requirements fixed. Preserve the best verified configuration and useful memory/speed trade-offs. Deliver reproducible results and state the limits of verification.

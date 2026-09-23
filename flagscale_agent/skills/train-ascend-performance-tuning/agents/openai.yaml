@@ -1,4 +1,4 @@
 interface:
-  display_name: "昇腾训练调优"
-  short_description: "围绕显存、计算与通信选择和组合实验，在预算内完成昇腾训练调优"
-  default_prompt: "使用 $train-ascend-performance-tuning，根据当前训练的显存、计算效率和通信开销，在已有资源与预算内自主选择方法、探索组合，交付通过复测的配置和结论。"
+  display_name: "Ascend Training Performance Tuning"
+  short_description: "Tune Ascend training within a budget using memory, compute, and communication experiments"
+  default_prompt: "Use $train-ascend-performance-tuning to choose methods and explore combinations based on the training run's memory use, compute efficiency, and communication overhead. Stay within the available resources and budget, then deliver a retested configuration and conclusions."

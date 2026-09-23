@@ -1,15 +1,15 @@
 <!-- Copyright 2026 FlagOS Contributors. SPDX-License-Identifier: Apache-2.0 -->
 
-# 昇腾训练 profile 采集与分析
+# Collect and Analyze Ascend Training Profiles
 
-**加载时机**：需要生成 torch_npu profiler wrapper、采集 FlagScale 训练 profile，或分析已有 NPU 数据。
+**Load when:** The task requires generating a torch_npu profiler wrapper, collecting a FlagScale training profile, or analyzing existing NPU data.
 
-**工作流**：根据任务选择起点和终点：只生成完成入口后交付；采集完成有界短跑与产物验收后交付；分析已有数据从盘点开始，再提取窗口事实和提出验证实验。
+**Workflow:** Choose the start and end point for the task. For generation only, deliver the wrapper once the entrypoint is ready. For collection, complete a bounded short run and validate its artifacts. For existing data, start with inventory, extract facts from a target window, and propose validation experiments.
 
-**产物**：只生成交付 wrapper、配方差异和命令；采集交付原始产物与已验收范围；分析交付可解析的窗口结果、瓶颈报告及缺口。由调优任务调用时，将证据与假设返回主流程，不另建实验循环。
+**Outputs:** For generation, deliver the wrapper, recipe change, and command. For collection, deliver raw artifacts and the validated scope. For analysis, deliver a parseable window result, bottleneck report, and evidence gaps. When invoked by a tuning task, return evidence and hypotheses to the main workflow rather than creating another experiment loop.
 
-**原生能力复用**：沿用当前计划，以 `plan_update` 回写进度和验收；文本产物用 `read_file`/`write_file`，采集共享实验记录并标 `stage=profile`，通过 `train-run` 选择有界单次运行或直接 CLI 路径，沿其启动与监测方式执行，另验全部实际 worker 收尾。复用已有记录，细节按具体缺口读取。
+**Reuse native capabilities:** Continue the current plan and use `plan_update` for progress and acceptance. Use `read_file`/`write_file` for text artifacts. Add `stage=profile` to the shared experiment record. Use `train-run` for a bounded single run or the direct CLI path, following its launch and monitoring guidance. Also verify that every actual worker has exited. Reuse existing records and read further details only when a specific gap requires them.
 
-**按需知识**：按需读取 `know-ascend-profiling` 中 `ascend_profiling/collection-and-analysis.md` 的相关章节；测量口径来自 `know-ascend-training`。脚本用法保留在 [wrapper 操作说明](references/wrapper-generation.md)。
+**Knowledge on demand:** Read relevant sections of `ascend_profiling/collection-and-analysis.md` in `know-ascend-profiling` as needed. Use `know-ascend-training` for measurement definitions. Script usage stays in the [wrapper instructions](references/wrapper-generation.md).
 
-已有数据分析不启动训练；真实 NPU 产物通过验收后才能报告采集成功，profile 耗时不参与训练性能排名。
+Analyzing existing data does not launch training. Report collection success only after validating real NPU artifacts. Do not include profiled run times in training performance rankings.

@@ -1,19 +1,20 @@
 ---
 name: train-ascend-profiling
 description: >-
-  按工作流生成 torch_npu profiler wrapper、采集 FlagScale 昇腾训练 profile，
-  或分析已有 NPU 性能数据，交付带原始证据的瓶颈报告与下一步实验。
+  Generate a torch_npu profiler wrapper, collect a profile from FlagScale
+  training on Ascend, or analyze existing NPU performance data. Deliver
+  a bottleneck report backed by raw evidence and propose the next experiment.
 ---
 
 <!-- Copyright 2026 FlagOS Contributors. SPDX-License-Identifier: Apache-2.0 -->
 
-# 昇腾训练 profile 采集与分析
+# Collect and Analyze Ascend Training Profiles
 
-复用当前配方、运行记录和资源约定，先明确本次要回答的问题：仅生成 wrapper、采集 profile，或分析已有产物。只执行对应步骤；调优调用时沿用主计划，不另建调优循环。
+Reuse the current recipe, run records, and resource allocation. First identify the task: generate a wrapper, collect a profile, or analyze existing artifacts. Run only the corresponding steps. When invoked during tuning, use the main plan; do not create a separate tuning loop.
 
-## 1. 生成 wrapper
+## 1. Generate the wrapper
 
-按 [wrapper 操作说明](references/wrapper-generation.md) 使用目标环境的原训练入口；`SKILL_DIR` 是本技能目录。
+Follow the [wrapper instructions](references/wrapper-generation.md) using the original training entrypoint from the target environment. `SKILL_DIR` is this skill's directory.
 
 ```bash
 python "$SKILL_DIR/scripts/generate_profile_wrapper.py" \
@@ -22,40 +23,40 @@ python "$SKILL_DIR/scripts/generate_profile_wrapper.py" \
   --wait 3 --warmup 1 --active 1 --ranks 0 --level Level1
 ```
 
-默认窗口需要 5 次正常 `train_step` 返回；实际 wait 依据已知预热情况设置。已核实训练模块文件时可加 `--training-file`，不要按仓库名猜测。
-仅生成任务交付 wrapper、配方差异和命令后结束。原入口不可访问时交付待执行命令，明确文件尚未生成。
+The default window requires five normal `train_step` returns. Set `wait` based on known warmup behavior. Add `--training-file` only when the training module file has been verified; do not infer it from the repository name.
+For a generation-only task, deliver the wrapper, recipe change, and command, then stop. If the original entrypoint is inaccessible, deliver the command to run in the target environment and state that the file has not been generated.
 
-## 2. 采集
+## 2. Collect
 
-复制独立配方，将 `experiment.task.entrypoint` 指向 wrapper，按操作说明关闭内置 profiler，保留工作负载及分布式策略。
-通过已加载的 `train-run` 启动；支持的单机短跑使用其 [有界执行](../train-run/references/single-run.md)。在同一实验记录中保存本次 `stage=profile`、配置、global ranks、窗口、日志与退出证据。
+Copy the recipe for a separate attempt, point `experiment.task.entrypoint` to the wrapper, disable the built-in profiler as described in the wrapper instructions, and preserve the workload and distributed strategy.
+Launch through the already loaded `train-run` skill. For a supported single-node short run, follow its [bounded execution instructions](../train-run/references/single-run.md). Record `stage=profile`, the configuration, global ranks, window, logs, and exit evidence in the same experiment record.
 
-wrapper 结束采集窗口后训练仍继续，由配方迭代数和 launcher 期限结束训练。确认全部自有 worker 收尾；失败返回原始错误与产物，由调用方决定重试。
+Training continues after the wrapper completes the collection window; the recipe's iteration count and launcher time limit must end the run. Confirm that all workers from this run have exited. On failure, return the original error and artifacts so the caller can decide whether to retry.
 
-## 3. 盘点与验收
+## 3. Inventory and validate
 
 ```bash
 python "$SKILL_DIR/scripts/profile_inspect.py" inventory "$PROFILE_DIR" > "$RUN_DIR/profile-inventory.json"
 ```
 
-检查摘要和读取限制；若目录盘点截断，只对相关子目录继续。新采集任务核对所选 rank 的 `wrapper-status.json`、完整入口终态、采集窗口与真实 NPU 事件；目录存在或回调返回不是完整采集证据。已有产物只使用其实际元信息，不补造 wrapper 状态。
+Check the summary and read limits. If inventory is truncated, inspect only the relevant subdirectories next. For a newly collected profile, verify `wrapper-status.json` for each selected rank, the final entrypoint status, collection window, and real NPU events. A directory or returned callback alone does not prove a complete collection. For existing artifacts, use their actual metadata; do not invent wrapper status.
 
-`inventory` 只识别文件和 CSV 表头，不转换 DB、raw PROF 或 trace。直接窗口分析支持逐任务 CSV 的 `Start Time(us)`/`Duration(us)` 或 `Task Start Time(us)`/`Task Duration(us)`，以及非空 device 列。只有其他格式时，复用已有验证的导出方法；缺少方法则返回格式缺口，不临时编造命令。
+`inventory` identifies files and CSV headers; it does not convert a DB, raw PROF directory, or trace. Direct window analysis accepts per-task CSV columns `Start Time(us)`/`Duration(us)` or `Task Start Time(us)`/`Task Duration(us)`, plus a nonempty device column. For other formats, reuse an export method already validated in the environment. If none exists, report the format gap instead of improvising a command.
 
-仅采集任务交付原始产物、命令及已验收范围后结束。
+For a collection-only task, deliver the raw artifacts, commands, and validated scope, then stop.
 
-## 4. 分析目标窗口
+## 4. Analyze the target window
 
-从实际 step/时间标记取得同一设备的窗口，替换下面的示意数值：
+Get the window on the same device from actual step or time markers. Replace these example values:
 
 ```bash
 python "$SKILL_DIR/scripts/profile_inspect.py" window "$KERNEL_CSV" \
   --start-us 1000000 --end-us 1100000 --device-id 0 > "$RUN_DIR/profile-window.json"
 ```
 
-默认最多读取 8 MiB / 100000 行；输入超限时可在资源预算内显式设置 `--max-bytes`、`--max-rows`，或使用已有的完整窗口导出。不能截取 CSV 开头后宣称覆盖了整个目标窗口。
-检查 JSON 的 `status`、设备范围、坏行与截断，再对照原始任务解释重点差异。`uncovered` 表示没有记录任务覆盖，算子累计时长也不是关键路径贡献。
+By default the tool reads at most 8 MiB or 100,000 rows. For larger inputs, explicitly set `--max-bytes` and `--max-rows` within the resource budget, or use an existing export of the complete window. Do not read only the start of a CSV and claim to cover the entire target window.
+Check the JSON `status`, device range, malformed rows, and truncation; then compare the key differences against the raw tasks. `uncovered` means no recorded task covers that time, and cumulative operator duration is not a measure of critical-path contribution.
 
-每项只记录“观察事实、候选原因、缺少的证据、最小验证”。统计或时钟关系不明时，按需读取 `know-ascend-profiling` 的 `ascend_profiling/collection-and-analysis.md`；训练指标定义读 `know-ascend-training` 的 `ascend_training/measurement-and-records.md`。
+For each finding, record only the observation, possible cause, missing evidence, and smallest validation experiment. If statistics or clock relationships are unclear, read the relevant part of `ascend_profiling/collection-and-analysis.md` in `know-ascend-profiling`. For training metric definitions, read `ascend_training/measurement-and-records.md` in `know-ascend-training`.
 
-交付原始路径、窗口 JSON、观察与待验证假设；返回主调优流程决定候选。带 profiler 的运行时间不进入无 profiler 的性能排名；部分产物或未知原因保持其实际证据范围。
+Deliver raw paths, the window JSON, observations, and hypotheses to verify. Return to the main tuning workflow to select candidates. Do not include profiled runs in profiler-free performance rankings. Keep partial artifacts and unknown causes within their actual evidence scope.
