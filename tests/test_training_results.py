@@ -306,7 +306,7 @@ def test_cli_with_request_file(tmp_path):
     }
     path = tmp_path / "request.json"
     path.write_text(json.dumps(request))
-    proc = subprocess.run([sys.executable, "-m", "flagscale_agent.training_results", "--request", str(path)],
+    proc = subprocess.run([sys.executable, "-m", "flagscale_agent.react.tools.analyze_training_results", "--request", str(path)],
                           capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout)["runs"][0]["measurement"]["step_time_ms"]["count"] == 30

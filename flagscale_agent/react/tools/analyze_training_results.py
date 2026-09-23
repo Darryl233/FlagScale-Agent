@@ -5,7 +5,7 @@
 
 Use one loss-reporting log per *attempt*, with log_interval=1. Do not concatenate
 rank logs or resumed attempts. The CLI compatibility entrypoint is
-``python -m flagscale_agent.training_results --request request.json``; its request
+``python -m flagscale_agent.react.tools.analyze_training_results --request request.json``; its request
 has the same fields as ``analyze_results``.
 This measures logged training steps, not end-to-end job time or convergence.
 """
