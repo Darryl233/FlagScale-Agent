@@ -233,6 +233,7 @@ software_stack:
 | 01_infrastructure_analysis | 被依赖 | 软件框架如何使用硬件能力（如Megatron的TP实现如何映射到NVLink） |
 | 02_implementation_analysis | 被依赖 | 模型实现的并行策略选择依赖硬件分析结论 |
 | 03_paper_research | 参考 | 论文中的infra配置需对照自身硬件评估可行性 |
+| topo-detect skill | 执行层 | 本标准定义"分析什么"，skill定义"怎么跑命令" |
 | know-cluster-infra | 产出存储 | 分析结果作为知识存入集群基础设施知识库 |
 
 ## 六、常见陷阱
