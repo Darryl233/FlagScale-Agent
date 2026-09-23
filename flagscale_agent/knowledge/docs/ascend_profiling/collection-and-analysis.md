@@ -1,146 +1,102 @@
 <!-- Copyright 2026 FlagOS Contributors. SPDX-License-Identifier: Apache-2.0 -->
 
-# NPU profiling 的采集兼容性与分析依据
+# NPU profiling 的采集机制与分析依据
 
-Profiling 的结论受采集接口、时钟域、事件覆盖和统计口径约束。完整 optimizer step 与 A/B 的比较依据见
-[共享测量依据](../ascend_training/measurement-and-records.md)。
+Profile 描述采样窗口内记录到的活动；它能支持哪些结论，取决于事件覆盖、字段含义和统计口径。完整 optimizer step 与 A/B 比较的指标定义见 [训练测量依据](../ascend_training/measurement-and-records.md)。
 
-## 采集能力与依赖
+## 采集机制
 
-Python、torch、torch_npu、CANN、驱动、三仓修订、容器和设备共同决定采集兼容性。
-已有 CSV 的离线区间分析不依赖 NPU 执行环境；它与原始数据解码、数据库解析及训练采集的依赖不同。
-已安装的 `msprof`、`msprof-analyze`、MindStudio Insight 可用于当前格式的导出、集群分析和人工时间线核对。
-可用格式由实际可执行路径、版本和输入契约决定，最新版接口不代表当前环境能力。
-数据库、压缩 trace 和原始 PROF 数据需要匹配版本的解析工具，转换后仅保留的 CSV 字段可能不足以支持原有结论。
+`torch_npu.profiler` 的可用接口、采集层级和事件字段取决于安装版本及设备。调用栈、shape 等采集选项会改变开销与可分析范围；带 profiler 的步时不能直接代替无 profiler 的性能测量。接口兼容涉及构造、生命周期和导出，成功创建对象不等于已经取得 NPU 事件。
 
-CANN 8.1.RC1 文档中 Level1 才增加通信明细等数据；不同版本及芯片的选项与字段仍须现场核对。
-先采集低开销 CPU/NPU 时间线；缺调用归属才短开 stack，缺 shape 才补 shapes，缺通信细节再用相应 level。
-给出采样 rank、窗口、输出和额度，不默认 rank 0 代表所有阶段。采集保留完整更新，并与无 profiler 性能测量分离。
-[Ascend PyTorch Profiler 文档](https://www.hiascend.com/document/detail/zh/canncommercial/81RC1/devaids/devtools/profiling/atlasprofiling_16_0033.html)
+采样 schedule 按 `prof.step()` 调用推进，与训练 iteration 的对应关系由调用位置决定。CPU 的 `ProfilerStep#` 或训练调用标注反映主机时间窗；NPU 异步任务可能跨越边界，因此主机标注结束不代表该次更新的设备工作已经结束。
 
-## FlagScale 训练入口的配置与绑定
+不同 rank 可能承担不同 PP stage 或负载，局部采样只反映被采集的范围。原始 PROF、数据库和 trace 的解析依赖对应格式的工具；已有逐任务 CSV 的离线区间统计不需要 NPU 执行环境。采集接口参考 [Ascend PyTorch Profiler 文档](https://www.hiascend.com/document/detail/zh/canncommercial/81RC1/devaids/devtools/profiling/atlasprofiling_16_0033.html)，具体能力以安装版本为准。
 
-FlagScale 的配置到 profiler 消费点存在多层映射。以下源码字段适用于修订 `3444b573474104065144fadba63841d41bb0756f`，其他版本需按实际消费者确认：
+### 采集参数与 timeline 的影响
 
-| 层次 | 映射关系与兼容条件 |
+下表区分**增加哪些可见信息**与**采集怎样扰动执行**。开销随模型、事件密度、软件版本和存储条件变化，没有通用百分比；“更多事件”也不意味着时间测量更接近无采集运行。参数语义参考 [Ascend Profiler 接口说明](https://www.hiascend.com/doc_center/source/zh/CANNCommunityEdition/82RC1alpha002/devaids/Profiling/atlasprofiling_16_0033.html)，开销方向参考 [官方最小膨胀采集说明](https://www.hiascend.com/document/caselibrary/detail/profilingcase_007)。
+
+#### `profile(...)`：框架与设备事件
+
+| 参数 | 含义及 timeline 可见信息 | 开销与判断边界 |
+| --- | --- | --- |
+| `activities` | `CPU` 记录 PyTorch 框架事件；`NPU` 记录 CANN 与设备事件。两者同时开启才能结合框架下发与设备执行分析 | 仅采 NPU 可减少框架侧采集，但缺少 PyTorch 调用上下文；仅采 CPU 无法判断 NPU 实际执行与空洞 |
+| `record_shapes` | 为框架算子记录输入 shape/type，帮助区分同名算子；依赖 CPU 采集 | 增加逐算子元数据记录与数据量，不会让设备时间戳更精确 |
+| `with_stack` | 记录框架与 CPU 算子调用栈，便于追到调用位置；依赖 CPU 采集 | 官方列为主要高开销项；栈采集可能拖慢 host 下发，放大设备等待，影响原有重叠 |
+| `with_modules` | 记录 module 层级的 Python 调用信息；依赖 CPU 采集 | 需要模块归属时通常比完整 `with_stack` 开销小，但仍会引入开销；二者都关闭才是不采这两类调用信息 |
+| `profile_memory` | 记录内存分配、释放及占用，用于内存分析 | 增加内存事件记录开销，不是观察计算/通信 timeline 的必要项；独立 `memory_timeline` 导出还需要 shape、调用信息等配套数据 |
+| `with_flops` | 请求算子浮点操作信息，依赖 CPU 采集 | 不是硬件 FLOPS 实测；上述版本文档标注暂不支持解析，不能期待它增加有效 timeline 轨道或据此计算 MFU |
+
+上表除 `activities` 外的布尔开关默认均为 `False`。只有需要对应归属或内存证据时，额外信息才有助于当前分析。
+
+#### `schedule(...)`：采集范围
+
+顺序为一次性的 `skip_first`，随后循环 `wait → warmup → active`：
+
+- `skip_first` 只在最开始跳过指定步数；`wait` 每个周期跳过指定步数，这些阶段不进行活动数据采集。
+- `warmup` 是 profiler 的准备阶段，不作为正式采样窗口；它不能代替模型编译、缓存等训练预热。
+- `active` 决定连续记录多少步；`repeat` 决定周期数，`0` 表示持续循环直到停止。增大两者会增加总采集量和解析成本；缩小窗口并不会消除单步采集开销。
+
+例如从第 1 次训练更新前启动，并在每次完整更新后调用一次 `prof.step()`，`wait=3, warmup=1, active=2, repeat=1, skip_first=0` 对应跳过更新 1–3、准备更新 4、记录更新 5–6。`prof.step()` 若放在 microbatch 后，计数也会变为 microbatch。未配置 schedule 时默认持续记录，不会自动跳过训练前期。
+
+#### `experimental_config`：层级与硬件指标
+
+以下参数传给 `torch_npu.profiler._ExperimentalConfig(...)`，再作为 `profile` 的 `experimental_config`。
+
+| 参数/取值 | 增加的信息 | 开销及 timeline 影响 |
+| --- | --- | --- |
+| `profiler_level=Level0` | 基础框架、设备任务与算子信息 | 层级中开销较低，适合先看整体时序；部分详细事件和通信分析产物不在此层级 |
+| `profiler_level=Level1` | 在 Level0 上增加 AscendCL、通信分析数据，并支持 AI Core 指标 | 比 Level0 采集更多数据；需要通信明细时有用，指标采集还受 `aic_metrics` 控制 |
+| `profiler_level=Level2` | 在 Level1 上增加 Runtime、AI CPU 等详细数据 | 数据量和扰动进一步增加，适合定位低层调用，不宜作为每次采集的默认值 |
+| `aic_metrics` | `PipeUtilization` 等选项提供 AI Core 计数器指标，`AiCoreNone` 关闭指标采集 | 增加硬件指标采集成本，主要补充算子详情，不是让时间线更细；Level0 不采这类指标，提高到 Level1/2 时还需留意指标默认值 |
+| `l2_cache` | 采集 L2 Cache 指标，生成相应统计 | 额外的硬件指标采集；不需要缓存证据时保持关闭，不把开启前后的算子时长直接视为同口径 |
+| `mstx` | 采集代码中已有的 MSTX 自定义标记，用于识别阶段/范围；旧接口名为 `msprof_tx` | 开销取决于打点密度；开关本身不会自动生成层、FWD/BWD 等模型语义 |
+| `export_type` / `data_simplification` | 前者选择 Text/Db 等解析产物；后者控制导出后的文件精简 | 主要影响解析、存储和后续可用数据，不会降低已发生的事件采集开销；精简保留哪些文件取决于版本 |
+
+#### 回调、落盘与时序扰动
+
+`on_trace_ready` 在采集窗口完成时调用处理函数；`tensorboard_trace_handler(dir_name, worker_name, analyse_flag, async_mode)` 中，前两项设置目录与工作进程标识，**`worker_name` 不负责选择采集 rank**。`analyse_flag=True` 默认自动解析，`False` 留待离线解析；`async_mode=False` 默认同步解析，`True` 让解析异步进行。异步解析减少主流程阻塞，但仍占用 CPU、内存和 I/O，也不消除采集本身的开销。参见 [导出回调参数说明](https://www.hiascend.com/document/detail/zh/Pytorch/720/apiref/torchnpuCustomsapi/context/torch_npu-profiler-tensorboard_trace_handler.md)。
+
+由这些机制可知：timeline 中的下发间隔、设备空洞和计算通信重叠，可能同时受到模型与 profiler 扰动；启停、flush、同步解析附近的墙钟耗时不能全算作训练计算。多 rank 同时写共享存储还可能放大 I/O 等待；只在部分 rank 开高开销采集，也可能通过通信等待影响其他 rank。
+
+用于观察整体时序的低开销起点是 CPU+NPU、Level0、短 active 窗口，关闭 shape、stack、modules、memory 和硬件指标等附加采集；通信证据不足再升 Level1，缺调用归属再补 modules/stack，缺 shape 或内存证据再单独开启。采集扰动可用同配置稳态步时的 `T_profile / T_no_profile - 1` 估算，并把启停/解析耗时单列；优化收益仍以无 profiler 运行确认。
+
+## 数据含义
+
+逐任务表包含每次任务的起点和时长，可以重建记录到的时间区间；只有 Count、总时长或平均值的汇总表不能定位任务间空洞。数据能力由实际列决定，不能仅根据 `op_summary`、`operator_details` 等文件名判断。
+
+| 信息 | 常见字段与含义 |
 | --- | --- |
-| 配置生成 | `flagscale/train/megatron/training/config/common_config.py` 中 `use_nsys_profiler` 映射 `--profile`，运行时名为 `profile` |
-| 独立参数 | `use_pytorch_profiler`、`profile_step_start/end`、`profile_ranks` 分别定义，不能只设置一个布尔值就认定命中 |
-| 消费条件 | 训练循环中 `args.profile`、所选 rank 与 `args.use_pytorch_profiler` 同时满足才进入该分支 |
-| schedule | 此分支使用 `wait=max(start-1,0)`、起点大于零时 `warmup=1`、`active=end-start`、`repeat=1`；需检查起止合法且覆盖所需更新 |
-| 推进 | 查 `start`、循环内 `prof.step`、`stop` 和恢复 iteration 的关系；配置中的 step 数不当然等于绝对训练 iteration |
-| handler | 保存 `rank-X.json.gz`、`_cuda_kernel_non_comm.csv`、`_torch_aten_op.csv`；部分汇总按 `cuda_time_total` 和 NCCL 名称过滤 |
-| NPU 绑定 | `platform_npu` 等路径可能通过 `transfer_to_npu` 改写绑定；应核实运行时 profiler 对象与实际 NPU 事件 |
+| 起点与时长 | `Start Time(us)` / `Duration(us)`，或 `Task Start Time(us)` / `Task Duration(us)`；单位为微秒 |
+| 设备 | `Device ID`、`device_id` 等；确定任务所属设备 |
+| 名称与类型 | `Name` / `Op Name`、`Type` / `OP Type`；任务类型或加速核类型与算子类型不是同一概念 |
+| 流 | `Stream ID`；区分流中的任务与并发关系 |
+| 输入 | `Input Shapes`、`Input Data Types`；区分同名算子的形状和精度 |
 
-不要直接复制 MindSpeed 参数或原版 Megatron handler。修改前核对当前版本的配置生成与实际消费者。
-以实际导出的 NPU 时间戳、任务、设备、通信与 step 标记证明采集有效；文件名带 CUDA 既不是有效证明，也不是无效证明。
-必要时沿已安装 torch_npu API 增加一个有界采集入口，验证后再采集目标窗口。
-独立 wrapper 可在保留原训练入口的前提下直接调用 NPU handler；与内置 profiler 同时启动可能重复采集或产生生命周期冲突。
-hook 绑定、调用返回计数、原入口终态和真实产物共同决定该采集路径是否有效。
+通信类型由导出工具定义，可能以 `COMMUNICATION`、`hcom_` 等表示，名称不含 `HCCL` 不代表没有通信。CANN 8.1.RC1 的 `Task Wait Time(us)` 表示前后任务间隔，不是 host enqueue 延迟；字段语义参考对应版本的 [op_summary 说明](https://www.hiascend.com/document/detail/zh/canncommercial/81RC1/devaids/devtools/profiling/atlasprofiling_16_0067.html)。
 
-### 接口兼容检查：构造成功只是第一步
+任务区间合并以同一设备、同一时钟域为前提。跨 rank 时间戳差值需要可靠的时钟对齐；host 与设备任务的对应关系需要关联 ID、flow 或其他可靠的任务匹配证据，单靠时间包围关系不能确定。
 
-平台初始化可能替换 profiler 绑定；独立 import 的模块名或单算子采集成功不能证明训练消费者与该接口兼容。
-在完整初始化后的消费点核对 `inspect.signature`、绑定类型和对象属性。
-若出现 `unexpected keyword argument 'execution_trace_observer'`，应定位消费者与实际绑定的签名差异，
-该错误表明当前消费者与绑定的接口不匹配，不能据此认定 NPU 采集整体不可用。
+## 统计口径
 
-Profiler 兼容性包含以下相互独立的接口层次：
+设窗口为 `W=[start,end)`，同一设备内的任务区间为 `I_i`：
 
-| 接口层次 | 必须核对 |
-| --- | --- |
-| 构造 | 消费者实际传入的全部关键字；`execution_trace_observer=None` 仍是传参，不等于省略 |
-| 生命周期 | `start/step/stop` 及停止后的属性访问；使用 execution trace 的消费者可能访问 `prof.execution_trace_observer` 并调用 observer 的 `unregister_callback` |
-| handler/export | 回调时机、导出方法、统计字段和输出格式；平台替换后不假设继承原 PyTorch 接口 |
-| 实际产物 | NPU 事件、设备、逐任务时间戳、step 覆盖与 flush 完成；构造成功不证明这些成立 |
+- **窗口时长**：`|W|`，即分析范围的 wall-clock 时长。
+- **任务累计时长**：`Σ|I_i ∩ W|`，并发任务会重复计时，可能大于窗口时长。
+- **记录覆盖时长**：`|⋃(I_i ∩ W)|`，并发区间只计一次。
+- **未覆盖时长**：`|W| - |⋃(I_i ∩ W)|`，表示没有被所选任务记录覆盖的时间，不直接等于设备空闲。
 
-只删除不支持的构造参数不能证明兼容，还必须核对结束与导出路径。任务明确要求 execution trace 时，不能静默丢弃该功能；
-替代入口必须满足相同功能需求，接口适配的有效性取决于完整生命周期；版本升级本身也不保证兼容。
-独立采集成功可作为该入口的功能证据；内置入口若仍有阻塞，需分别记录，不能由 wrapper 成功推断内置入口已修复。
-独立 wrapper 的适用条件见 [兼容边界与有效性证据](#独立-wrapper-的兼容边界与有效性证据)。
+窗口统计包含所有与窗口相交的任务，并裁剪到窗口边界。若输入遗漏、读取截断或字段无效，覆盖率和空洞结论只能用于已知记录；空文件不能证明设备完全空闲。
 
-## 输入字段与分析能力
+计算与通信各自的区间并集，其交集表示时间重叠。通信未与计算重叠的部分是否延迟了训练，还取决于生产、等待和消费关系。算子累计时长、区间并集与窗口时长是不同口径，不能相加为 step 延迟；记录覆盖率也不等于算力利用率。
 
-来源、文件大小、CSV 表头以及 trace/db/raw 目录结构可以用于判断输入类型，而无需先加载完整大文件。
-目录深度、访问目录项数、单文件及累计读取字节数会限制发现范围；扫描截断时，未发现文件只能记为未知。
-符号链接可能使数据离开预期输入范围，去重和范围判断还需考虑链接目标。
-大型 `operator_details.csv` 常含多行调用栈；不要拿前几行样本外推全文件统计。
+## 归因依据
 
-逐任务时间窗分析依赖实际列语义，而非固定文件名。常见列组合包括：
+| 观察 | 支持归因所需的证据 | 能得出的结论范围 |
+| --- | --- | --- |
+| 同类算子累计耗时高 | 名称、shape/dtype、调用次数，以及层、FWD/BWD、重计算标记 | 可筛选热点；累计时长不等于优化后能节省的 step 时间 |
+| 反复出现未覆盖窗口 | 同一时钟域内的 host 下发、数据准备、copy/sync 和前后任务 | 可区分数据等待、下发或同步等候选原因；空洞本身不能确定根因 |
+| 通信耗时长或重叠少 | 通信报告、计算区间和生产/等待/消费依赖 | 能定位等待时才能判断关键路径上的通信代价 |
+| 某个 rank 的 step 较慢 | 完整 step、PP stage 职责、负载与拓扑 | 差异可能来自负载或通信，不能只凭固定百分比认定慢卡 |
 
-| 信息 | 识别列 |
-| --- | --- |
-| 起点、时长（us） | `Start Time(us)`、`Duration(us)`；或 `Task Start Time(us)`、`Task Duration(us)` |
-| 设备 | `Device_id`、`Device ID`、`Device Id`、`device_id` |
-| 名称和类型 | `Name/Op Name`；`Type/OP Type`，缺失时保留 task type 作为分桶信息 |
-| 加速核 | `Task Type/Accelerator Core`，与 operator type 分开保存 |
-| 其他证据 | `Stream ID`、`Input Shapes`、`Input Data Types`；缺失限制流重叠、形状和精度归因 |
-
-有 Count/平均值但无逐次起止的聚合表不能定位空洞。`step_trace_time.csv` 中的 Computing、Free、Stage 等是汇总，
-不能伪造出 `[start,end)`。另一方面，CANN `op_summary_*.csv` 可能有 `Task Start Time(us)` 和 `Task Duration(us)`，
-因此不能仅凭文件名断言没有时间戳。
-该官方文档把 `Task Wait Time(us)` 定义为前后任务间隔，而非 host enqueue 延迟；时间语义须跟随 producer。
-[CANN op_summary 字段说明](https://www.hiascend.com/document/detail/zh/canncommercial/81RC1/devaids/devtools/profiling/atlasprofiling_16_0067.html)
-
-只有已知一个设备时钟域时才能合并任务。无设备列或设备值缺失意味着范围未知；多设备表须按设备分别分析。
-多个 rank 文件不能直接拼接，跨 rank 时间戳差值需可靠的时钟对齐；stage 比较先用各自完整 step 时长。
-导出小窗口时保留所有与窗口相交的记录，而非只保留起点位于窗口内的任务；保留来源映射和筛选条件。
-
-将同次导出的 host trace 标注映射到 kernel CSV 时，核对实际任务关联，例如名称、精确起点与
-Model/Stream/Task ID；时长字段可能采用不同的导出精度，不能用任意偏移或放宽误差来制造时钟对齐。
-同一线程中的训练调用标注被唯一 `ProfilerStep#` 包含时，可关联训练调用与采样 step；
-这仍是 host 标注的时间窗，异步设备任务可能跨越其边界，不能声称整次更新的异步工作都被覆盖。
-窗口相交任务数与通信报告按 step 归属的计数可不同，应分别标明口径。
-通信识别依实际 producer 的 task type 和通信报告；部分导出使用 `COMMUNICATION`、`hcom_` 等标记，
-不能仅因 kernel 名称不含 `HCCL` 就断言没有通信。
-
-## 时间窗统计与完整性
-
-设分析窗口为 `W=[start,end)`，同一设备内的任务区间为 `I_i`。记录覆盖时长是
-`|⋃(I_i ∩ W)|`，未覆盖时长是 `|W| - |⋃(I_i ∩ W)|`；多流并发区间只计一次。
-两者描述采集记录的覆盖，不直接描述设备利用率或全设备空闲。
-
-| 信息 | 解释边界 |
-| --- | --- |
-| 版本、来源、实际表头和读取范围 | 决定字段是否可解释、输入是否完整，不能由文件名替代 |
-| 窗口与时间精度 | 大绝对微秒时间戳用低精度浮点保存会丢失亚微秒差值；十进制或等效精度表示可避免此问题 |
-| 设备范围、缺失字段 | 设备归属不明或跨文件时钟未对齐时，不能合并为单一设备时间线 |
-| 有效行、坏行与截断位置 | NaN/Inf、负时长、列数不符及读取截断都会削弱完整性；有限正常数值只是可计算的必要条件 |
-| 任务区间并集与未覆盖量 | 完整读取时对有效记录精确；遗漏事件或截断时，并集为真实任务覆盖的下界，未覆盖量为上界 |
-| 最大未覆盖窗口 | 起止、前后原始行号、名称、核类型和 stream 可用于定位上下文；只列 top 项时需区分总数与省略数 |
-| `Name+Type+shape+dtype` 分桶 | 裁剪后的累计时长、次数与示例行用于热点筛选，重叠时长和不能当关键路径贡献 |
-
-空文件或没有可解析任务不能证明 100% 空闲。CSV 数值可计算也不证明采集完整、窗口覆盖完整 step、NPU 已同步或根因已确定。
-Host trace、通信 JSON、模型结构和 PMU 提供不同证据，无法从缺少相应字段的 kernel CSV 中还原。
-
-## 从区间到原因
-
-先把完整更新、microbatch、FWD/BWD、重计算、PP stage 和层注释对齐，再讨论局部贡献。
-缺注释时重复 kernel 模板只能作为结构候选；MoE 动态路由、融合、重计算和调度都可能改变调用次数。
-报告 wall span、区间并集、算子时长和不同口径，不能相加为全 step 延迟。
-AI CPU、HCCL 都计入全部任务并集时，AI CPU 活动不能同时被解释成该定义下的空洞。
-要讨论计算空闲，应另算计算任务并集；要讨论通信暴露，应测通信并集与计算并集的交集，避免按大算子与小任务重复计数。
-
-空洞附近保留前后任务和时间窗；同一时钟域下再查 host、ACL、copy/sync、通信等待证据。
-host 覆盖率须合并区间，不能叠加嵌套 Python/CPU 事件。用关联 ID/flow 和线程关系核对异步启动，不能只凭 host 时间包围。
-“未覆盖窗口反复出现”可成为事实；“Python 锁、数据等待、通信同步”仍需相应证据。
-低 host 覆盖不能证明 host-bound。采集起止附近空洞可能是截断；没有 PMU 不能由 busy 比例断言算力饱和。
-阈值如 30%、1 ms、95% wait ratio 只可作记录在案的筛选参数，不是芯片无关诊断结论。
-
-多卡瓶颈可按已安装 `msprof-analyze cluster` 的当前 help 接入；核对它所需的 L1 数据、rank 元数据、
-step_trace_time、通信明细与矩阵，或它支持的 db 组合。部分版本不支持混放 text/db，不能随意拼接产物。
-不机械采用旧文档中的带宽阈值或“差 5% 就是慢卡”；结合分配拓扑、并行策略、负载与重复基线。
-[Ascend mstt 集群分析输入契约](https://gitee.com/ascend/mstt/blob/br_release_MindStudio_8.1.RC1_TR5_20260623/profiler/msprof_analyze/cluster_analyse/README.md)
-
-## 独立 wrapper 的兼容边界与有效性证据
-
-独立 wrapper 可直接调用安装版本的 `torch_npu.profiler.profile` 和 NPU trace handler，
-避免复用与当前绑定不兼容的 Megatron 导出逻辑或全局替换 `torch.profiler`。
-不支持 `execution_trace_observer` 的接口不能仅靠省略参数提供 execution trace 或 Chakra 联合采集能力。
-独立采集路径可用与内置 profiler 兼容是两个不同结论，离线调用测试也不能代替真实训练循环的采集证据。
-
-有效采集需要同时确认 wrapper 命中了真实训练循环、调度窗口覆盖所需更新、trace 回调产生可解析的 CPU/NPU 产物，
-并检查所选 rank 的设备映射、时间戳及实际计算/通信事件。任务条数用于检查产物，不能成为跨模型的通过阈值。
-全部训练 worker 正常结束与所选 rank 采集有效是两类证据；局部采集不代表其他 rank 的关键路径，也不证明 checkpoint 完整恢复。
-安装版本的签名和实际产物优先于 [Ascend profiler 源码参考](https://github.com/Ascend/pytorch/blob/v2.7.1/torch_npu/profiler/profiler.py)
-或最新文档；一些实现会捕获内部错误，故生命周期调用未抛异常仍不足以证明有效。
+缺少模型标记时，重复 kernel 模板只能提供结构线索；融合、重计算和 MoE 动态路由都会影响次数。Host 嵌套事件的累计时长也会重复计时；低 host 覆盖不能单独证明 host-bound，设备任务覆盖高也不能在缺少硬件计数器等证据时证明算力饱和。

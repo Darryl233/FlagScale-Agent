@@ -9,28 +9,11 @@ description: >-
 
 # 昇腾训练 profile 采集与分析
 
-## 输入与完成条件
+复用当前配方、运行记录和资源约定，先明确本次要回答的问题：仅生成 wrapper、采集 profile，或分析已有产物。只执行对应步骤；调优调用时沿用主计划，不另建调优循环。
 
-记录要回答的问题、输入位置及已知的 run/step/rank 和版本。复用已有实验目录与资源约定，按本次任务选择终点：
+## 1. 生成 wrapper
 
-| 任务 | 必要输入 | 执行范围与完成条件 |
-| --- | --- | --- |
-| 只生成 wrapper | 可读取的原训练入口、目标输出位置 | 步骤 1；交付独立入口、配方改动及命令，不启动训练 |
-| 采集 profile | 可运行配方/命令、目标窗口与 rank、已有设备和预算约定 | 步骤 1–3；真实 NPU 产物验收通过，全部训练 worker 已收尾 |
-| 分析已有数据 | CSV、trace、数据库或 PROF 目录 | 步骤 3–4；交付带原始依据的观察、假设及缺口，不启动训练 |
-
-采集且分析时继续完成步骤 4。只有日志时先标出慢 iteration 与建议采集范围；任务不含采集则交付方案。
-缺少当前步骤必需的材料时交付具体缺口，不要求补齐其他分支的输入。
-用 `plan_status` 接续当前任务，沿用主调优计划；独立多步任务没有活动计划时才用 `plan_create` 建立计划。
-进度、文件读写和实验记录复用 [Agent 原生工具约定](../train-ascend-performance-tuning/references/agent-tools.md)。
-只生成或分析已有数据不创建训练 attempt；实际采集才向同一实验记录追加 `stage=profile` 的 attempt。
-
-## 执行流程
-
-### 1. 生成独立入口
-
-按照 [wrapper 操作说明](references/wrapper-generation.md) 核对入口和生成参数。
-`SKILL_DIR` 指向本技能目录；以下路径替换为本次实际位置：
+按 [wrapper 操作说明](references/wrapper-generation.md) 使用目标环境的原训练入口；`SKILL_DIR` 是本技能目录。
 
 ```bash
 python "$SKILL_DIR/scripts/generate_profile_wrapper.py" \
@@ -39,74 +22,40 @@ python "$SKILL_DIR/scripts/generate_profile_wrapper.py" \
   --wait 3 --warmup 1 --active 1 --ranks 0 --level Level1
 ```
 
-生成器必须能读取原入口；只有不可访问的远端路径时，交付目标环境的待执行命令，明确 wrapper 尚未生成，不用占位文件绕过检查。
-已核实实际 `megatron.training.training` 路径时，用 `--training-file` 加入运行时保护，不按仓库名称猜路径。
-**得到** wrapper 和采集配方改动。只生成任务在此交付；采集任务继续步骤 2。
+默认窗口需要 5 次正常 `train_step` 返回；实际 wait 依据已知预热情况设置。已核实训练模块文件时可加 `--training-file`，不要按仓库名猜测。
+仅生成任务交付 wrapper、配方差异和命令后结束。原入口不可访问时交付待执行命令，明确文件尚未生成。
 
-### 2. 启动有界采集
+## 2. 采集
 
-核对目标 Python、实际训练模块、设备和剩余预算；记录 global ranks、wait/warmup/active 与训练退出条件。
-把 wrapper 配置到本次专用配方，沿实际 resolved/argv 关闭内置 profiler。
-保留模型、数据和分布式策略，只修改本次采集与短跑需要的项。
-加载一次 `train-run`，复用已确认的环境和设备；单机 Megatron 短跑读取其 [单次运行说明](../train-run/references/single-run.md)，填写请求后照启动与等待命令执行，其他场景走其直接 CLI 路径。
-本次记录为 `stage=profile`，保存配方、窗口、设备、硬期限和准确日志路径。按所选执行路径跟踪 job 与退出结果，并核对全部所属 worker 收尾。
-取得实际命令、全 worker 日志与退出证据后继续验收。
-wrapper 按正常返回的 `train_step` 推进窗口，**窗口结束不会结束训练**；用配方和 launcher 控制训练退出。
-**得到**采集产物及全部 worker 日志，进入步骤 3。失败或窗口不足时保留证据并只收尾本作业；
-父调优调用时返回缺口，由主循环决定新 attempt；独立采集任务才按既定预算和查明的原因安排重试。
+复制独立配方，将 `experiment.task.entrypoint` 指向 wrapper，按操作说明关闭内置 profiler，保留工作负载及分布式策略。
+通过已加载的 `train-run` 启动；支持的单机短跑使用其 [有界执行](../train-run/references/single-run.md)。在同一实验记录中保存本次 `stage=profile`、配置、global ranks、窗口、日志与退出证据。
 
-### 3. 盘点并验收产物
+wrapper 结束采集窗口后训练仍继续，由配方迭代数和 launcher 期限结束训练。确认全部自有 worker 收尾；失败返回原始错误与产物，由调用方决定重试。
 
-对输入目录执行只读盘点：
+## 3. 盘点与验收
 
 ```bash
-python "$SKILL_DIR/scripts/profile_inspect.py" inventory /path/to/profile
+python "$SKILL_DIR/scripts/profile_inspect.py" inventory "$PROFILE_DIR" > "$RUN_DIR/profile-inventory.json"
 ```
 
-用 `read_file` 读取可访问的文本产物，用 `write_file` 保存验收结果、文件清单、实际 headers 和读取限制；
-大文件按段读取，目录深度或数量截断时继续盘点相关子目录。二进制产物仍由上述脚本和匹配的导出工具读取。
-对新采集作业分别检查 **全部训练 worker** 的退出和更新记录，以及 **所选采样 rank** 的
-`wrapper-status.json`、入口终态、schedule/返回次数、导出回调和真实 NPU 事件。
-已有数据按可取得的元信息核对来源与范围，不要求补造 wrapper 状态。记录 rank/device 映射、时间戳、目标窗口及原始路径；
-采集通信问题时另查通信明细。目录存在、回调返回或 rank 0 完成均不能单独证明采集成功。
-**得到** `profile-validation.json`，列清有效范围与缺失项。只采集任务在此交付；需要分析且数据可用时进入步骤 4。
-缺字段不补零；只有 db/raw 或字段不支持时走下方导出入口，无法转换则交付现有证据和缺口。
+检查摘要和读取限制；若目录盘点截断，只对相关子目录继续。新采集任务核对所选 rank 的 `wrapper-status.json`、完整入口终态、采集窗口与真实 NPU 事件；目录存在或回调返回不是完整采集证据。已有产物只使用其实际元信息，不补造 wrapper 状态。
 
-### 4. 提取窗口事实并提出验证实验
+`inventory` 只识别文件和 CSV 表头，不转换 DB、raw PROF 或 trace。直接窗口分析支持逐任务 CSV 的 `Start Time(us)`/`Duration(us)` 或 `Task Start Time(us)`/`Task Duration(us)`，以及非空 device 列。只有其他格式时，复用已有验证的导出方法；缺少方法则返回格式缺口，不临时编造命令。
 
-从 step 标记或已有时间范围确定实际窗口，核对单设备时钟域后执行；下列数值仅示意参数用法：
+仅采集任务交付原始产物、命令及已验收范围后结束。
+
+## 4. 分析目标窗口
+
+从实际 step/时间标记取得同一设备的窗口，替换下面的示意数值：
 
 ```bash
-python "$SKILL_DIR/scripts/profile_inspect.py" window /path/to/kernel_details.csv \
-  --start-us 1000000 --end-us 1100000 --device-id 0
+python "$SKILL_DIR/scripts/profile_inspect.py" window "$KERNEL_CSV" \
+  --start-us 1000000 --end-us 1100000 --device-id 0 > "$RUN_DIR/profile-window.json"
 ```
 
-检查窗口 JSON 的 `status`、设备范围、坏行和截断；超限时导出目标范围并保留跨边界任务。
-从未覆盖窗口、算子分桶或 rank/stage 差异选择最需要解释的项，回到原始行和相关时间线核对。
-每项写明“观察事实 → 候选原因 → 尚缺证据 → 最小验证”；host 归因先核对 host/device 对应关系，缺关联时保留未知。
-`uncovered` 仅表示记录任务未覆盖；累计算子时长不能直接当关键路径收益。完整更新、microbatch 与重计算边界按实际标记核实。
-**得到**窗口 JSON 和有证据出处的瓶颈报告；不能确定原因时交付假设及下一步所需证据。
+默认最多读取 8 MiB / 100000 行；输入超限时可在资源预算内显式设置 `--max-bytes`、`--max-rows`，或使用已有的完整窗口导出。不能截取 CSV 开头后宣称覆盖了整个目标窗口。
+检查 JSON 的 `status`、设备范围、坏行与截断，再对照原始任务解释重点差异。`uncovered` 表示没有记录任务覆盖，算子累计时长也不是关键路径贡献。
 
-## 按需扩展
+每项只记录“观察事实、候选原因、缺少的证据、最小验证”。统计或时钟关系不明时，按需读取 `know-ascend-profiling` 的 `ascend_profiling/collection-and-analysis.md`；训练指标定义读 `know-ascend-training` 的 `ascend_training/measurement-and-records.md`。
 
-| 当前缺口 | 接入口 | 取得的结果 |
-| --- | --- | --- |
-| wrapper 参数、入口绑定或状态验收细节 | [wrapper 操作说明](references/wrapper-generation.md) | 可执行生成/采集命令或具体兼容性缺口 |
-| 采集配方或实际运行 | 当前配方/launcher 与 [原生工具约定](../train-ascend-performance-tuning/references/agent-tools.md) | 有效配置、一次有界运行及全部 worker 证据 |
-| 格式、时钟或归因不明；需要转换 db/raw | `load_knowledge(name="know-ascend-profiling")` 查询索引，再按段读取 `ascend_profiling/collection-and-analysis.md` | 输入契约、已安装且版本匹配的导出工具及分析依据 |
-| 完整更新、吞吐或质量口径不明 | `load_knowledge(name="know-ascend-training")` 查询索引，再按段读取 `ascend_training/measurement-and-records.md` | 本次窗口与指标口径 |
-
-由调优任务调用时，把原始证据、假设和缺口返回 [主调优流程](../train-ascend-performance-tuning/SKILL.md) 的候选生成步骤。
-主流程选择方法并验证收益；profile 耗时不进入性能排名。本技能不另建候选运行和排名循环。
-
-## 交付
-
-按实际执行范围交付，不要求所有任务生成同一套文件：
-
-- **只生成**：wrapper、配方差异和启动命令；入口不可访问时交付待执行生成命令，注明文件尚未生成。
-- **采集**：原始产物位置、复现命令、文件清单和 `profile-validation.json`，分别说明全部 worker 收尾及所选 rank 的验收结果。
-- **分析**：窗口 JSON（数据可解析时）与 `bottleneck-report.md`，包含原始路径/行号、版本、run/rank/窗口、观察与假设、缺口和最小验证实验。
-
-采集失败或只能分析部分数据时仍交付已有产物及限制，不将待执行命令、目录存在或局部证据写成采集成功。
-有活动计划时，将结果、证据路径和下一步写入 `plan_update` 的 `notes`，完成相应步骤时填写 `verification`；
-由主调优流程调用时只更新对应步骤，不结束整个计划。只有值得跨会话复用的已核实结论才经 `memory_list`/`memory_read` 查重后用 `memory_write` 保存，逐次采集记录留在实验文件。
+交付原始路径、窗口 JSON、观察与待验证假设；返回主调优流程决定候选。带 profiler 的运行时间不进入无 profiler 的性能排名；部分产物或未知原因保持其实际证据范围。

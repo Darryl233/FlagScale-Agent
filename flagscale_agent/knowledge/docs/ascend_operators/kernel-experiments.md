@@ -1,69 +1,58 @@
-<!--
- Copyright 2026 FlagOS Contributors
+<!-- Copyright 2026 FlagOS Contributors. SPDX-License-Identifier: Apache-2.0 -->
 
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
+# Ascend kernel 的资源与性能机制
 
-     http://www.apache.org/licenses/LICENSE-2.0
+本文解释 Triton-Ascend / Ascend C 的分块、任务划分、片上资源和指令流水。公共接口、训练梯度及三层性能口径见 [算子调用知识](operator-optimization.md)。
 
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
- -->
+## 执行资源与瓶颈
 
-# Ascend kernel 的资源、正确性与性能依据
+Cube 主要承担矩阵计算，Vector 承担向量计算，Scalar 处理标量控制及部分地址/索引工作，MTE 承担数据搬运。流水可以部分并发，也可能因依赖等待；占用比不是相互排斥的耗时分解，不能用固定百分比直接判定瓶颈。[Triton-Ascend 性能分析][profiling]
 
-Triton 或 Ascend C 实现的训练收益受热点占比、硬件资源、输入语义和公共调用成本共同约束。公共接口与三仓接入见[算子调用链与实现判断依据](operator-optimization.md)，训练计时口径见[共享测量依据](../ascend_training/measurement-and-records.md)。
+UB、L1、L0 等存储层用途不同，容量不能简单相加。可用资源、对齐、核数与编译接口由 SoC、CANN 和编译器版本决定；示例中的 UB 容量、固定 grid 或 CUDA 的 warp/stage 经验不构成所有 Ascend kernel 的约束。
 
-## 比较对象与收益上限
+## 可形成优化假设的机制
 
-代表性输入包括实际工作负载的小、中、大形状及关键尾部，并由 dtype、stride/layout、输入分布和梯度需求共同定义。相同数学函数的不同公共 callable 可能有不同的输入整理与调度成本，当前可用的兼容实现比任意 PyTorch 组合更适合作为性能参照。
-
-关键路径中可移除的 kernel 时间约束训练收益上限；非关键路径上的提速可能被已有重叠完全隐藏。自动搜索的编译和测量开销也属于优化成本，搜索空间由目标瓶颈、合法输入和设备能力决定。
-
-## 目标能力与版本边界
-
-实际 SoC/设备资源、CANN、PyTorch/torch_npu、Triton-Ascend 或 Ascend C 编译器及扩展修订共同决定可用接口。安装文档、编译器目标信息和最小调用结果的适用范围均受版本限制。AI Core、Vector、Cube 的资源口径与 kernel 执行类型需要分别解释。
-
-UB/L1/L0 容量、对齐要求、grid 映射、并行核数、累加精度、编译提示和双缓冲接口均依赖目标版本。其他型号的固定容量、核数上限或示例 API 不是通用约束；上游 Triton 存在同名接口也不等于 Ascend 支持。文档描述、编译通过和实际调用可用分别证明不同层次的能力。
-
-## 瓶颈与优化机制
-
-| 观察 | 可能有效的改动 | 同时受哪些条件约束 |
+| 线索 | 机制 | 收益与代价 |
 | --- | --- | --- |
-| 访存或搬运占关键时间 | 调整连续 tile、合并搬运、复用已载入数据 | 实际 stride、尾块、有效带宽；新增布局转换和分配的完整调用代价 |
-| 计算有效工作不足或冗余高 | 先改算法/重复计算，再比较合法 block 形状与映射 | 累加误差、目标编译器支持、真实计算引擎指标 |
-| 小任务 launch/同步主导 | 比较融合、每次任务工作量和依赖组织 | 是否扩大临时内存、减少有效并发或破坏流/事件顺序 |
-| 编译资源超限或执行落差大 | 缩小 tile、缩短活跃区间、核对生成代码/编译报告 | 附加 index/mask、中间张量、精度转换及实际搬运粒度 |
+| 大量短任务，下发/初始化占比高 | 合并逻辑任务，每个 program 在核内跨步处理多个 tile | 减少多轮调度，但可能增加串行工作或尾核不均；逻辑 grid 与物理核数不是同一概念。[任务划分][programming] |
+| 搬运指令多或重复读取 | 连续分块、合并搬运、复用已载入数据 | 较大 tile 提高有效搬运粒度，却增加活跃资源；整体搬入再 gather 是否值得取决于额外读取量与复用率。[编程指南][programming] |
+| CopyIn、Compute、CopyOut 串行 | 多 tile 与双缓冲形成搬运/计算流水 | 独立 tile 才有重叠空间；增加缓冲占用，过小工作量或纯计算主导时收益有限。[Ascend C 流水][pipeline] |
+| 尾块填充造成 Vector→MTE 依赖 | 在被屏蔽位置不影响任何有效结果时省去不必要填充 | Triton-Ascend 的 `care_padding=False` 是条件化实现示例；它不代替越界 mask，不能让未定义值进入有效归约。[迁移性能指南][migration] |
+| Scalar 指令或索引处理突出 | 简化重复地址计算，使用支持的表达与数据类型 | 某些版本/芯片的整数运算可能被标量化；改窄索引或改用浮点比较需要证明范围、溢出与精确表示，不可直接照搬示例 cast。[迁移性能指南][migration] |
+| 融合后反而变慢或编译溢出 | 缩小活跃 tile、缩短中间量生命周期，必要时拆分计算 | 融合节省写回，但同时活跃量可能迫使更小分块或阻碍多缓冲；单 pass 与多 pass 是访存、资源和数值之间的权衡。[资源说明][programming] |
 
-字段单位、采样范围和分母决定指标含义，缺失字段不是零。核内/核间的数据独立性决定可并行程度，尾核负载与同步需求可能限制扩展。融合、缓存复用、多缓冲或调度重排的收益依赖对应瓶颈及版本能力，不能由固定利用率阈值推断。
+这些机制不限定优化次序。矩阵计算的 tile 形状还影响 Cube 利用与边界浪费；不同核内流水之间的事件依赖不能因“减少同步”而省略。[Ascend C 流水与同步][pipeline]
 
-## 资源活跃量与极端输入
+## Tiling 与片上资源活跃量
 
-每个 tile 的资源占用由对象形状、实际存储 dtype、对齐后大小、所在存储层及创建到最后使用的活跃区间决定。输入/输出、中间结果、升精度量、累加器、offset/index/mask 和多缓冲副本都可能计入峰值。峰值是每个执行阶段同时活跃对象的占用，既不等于逻辑张量总大小，也不能把所有存储层简单累加为 UB。
+资源峰值由同时存活的对象决定：输入/输出、累加器、升精度中间量、offset/index/mask、padding 和多缓冲副本都可能参与占用。源码的逻辑元素数不等于编译后的分配；非连续访问和对齐扩张可能放大实际占用。[迁移中的资源扩张][migration-memory]
 
-核算只是估计；用目标编译器的资源分配报告、溢出诊断和生成代码校准，记录估计与实际差异。向上对齐、tile 扩张或向上取整都会增加占用；选择候选后重新核算，不能沿用原尺寸结论。资源余量由实测确定，不套用统一百分比。
+tile 变大可能减少循环和搬运指令，却提高资源压力；变小可能恢复流水能力，也可能增加循环、Scalar 与同步开销。编译器报告和真实输入下的测量用于判断这类取舍，不能只按“剩余 UB 越少越好”选择配置。
 
-容易改变正确性或资源占用的输入边界包括：
+双缓冲不是把所有可用内存机械减半：其额外占用取决于哪些队列/张量有多个副本及各自活跃期。Ascend C 的 `TPipe.InitBuffer` 用缓冲块数量和每块字节数描述队列存储；收益来自不同 tile 的并发，而非缓冲数本身。[双缓冲机制][pipeline]
 
-- 零元素、单元素、非整除尾块、边界前后尺寸、最大真实展开 token 及跨整数索引边界的用例。
-- 支持的非连续 stride/布局、合法别名或原地行为、可选输入缺省与存在、mask 全空/全满和有效索引范围。
-- 真实 dtype 的极小/极大幅值、抵消、归约长轴；NaN/Inf、重复索引等仅在 API 契约涉及其行为时验证。
-- 全部可微输入的前后向；mask、index、排列映射等离散输出按语义检查，不能仅用浮点近似比较。
+## 自动调优的作用与边界
 
-attention/CP 的正确性依赖布局、位置与 mask 的对应关系，包括每个 rank 的 Q/K/V 实际全局位置、分片及 gather 顺序，以及 causal/window/显式 mask 的行列含义。只有确认连续分片时，才能用 `rank × local_seq_len` 作为 query 起点；连续位置 mask 不能直接套到 zigzag 双块分片。
+`triton.autotune` 比较候选配置并按 key 缓存选择；key 用于区分会影响配置选择的输入条件，不能用单一 shape 的最优值推断其他 stride 或规模同样最优。tile 影响任务划分时，grid 必须随候选 meta 变化。[Autotune][autotune]
 
-小序列位置编号可构造独立的 CPU 数学参照：按实际分片与 gather 顺序排列 Q/K，再以全局位置定义参考 mask（causal 时为 `k_pos <= q_pos`，其他约束按原契约叠加）。逐项比较错放行和错屏蔽，并与 CP1/连续分片对照，可区分位置映射和掩码语义问题。简化 helper 的反例不证明真实 backend 使用了相同布局或最终 mask，也不能据此推断 K/V backward 缺少归约；这些结论分别依赖实际绑定、传入张量和梯度通信路径。
+所引 Triton-Ascend 指南中，导入 `triton.backends.ascend.runtime` 后的扩展支持 `configs=[]` 自动生成 Tiling 候选；它不等于自动搜索所有编译选项，也不保证全局最优。手写 `triton.Config` 是另一条路径。此处描述社区能力，不证明当前安装版本已提供相同接口。[能力边界][autotune]
 
-性能可比的前提是参考数学行为一致。精度与梯度容差由模型数值要求决定，更高精度累加同时改变资源代价。不支持的形状/dtype 需要由集中分派层确定性回退或按契约报错，越界或未知输入不能进入不具备相应处理能力的 kernel。
+调优会反复执行 kernel：inplace、原子累加或状态更新若没有恢复初态，会污染后续测量及正确性。首次编译/搜索成本与缓存命中后的执行成本不同，选择范围越大，准备成本通常越高；自动生成失败也不证明该算子无法实现。[副作用与成本][autotune]
 
-## 分层性能与集成正确性
+## 正确性与测量边界
 
-相同输入和测量方法下，kernel device 时间、完整 public-call 时间以及显存/临时分配反映不同层次的成本。编译与 warmup 不属于稳态执行；布局转换、辅助张量展开和 copy 属于 public-call。Profiler 按同名 kernel 聚合时可能混淆不同配置，调用身份与输入范围决定统计是否可比。
+尾块 mask 同时涉及合法访存和计算语义。归约的填充值必须与运算匹配，例如 sum 的加法零元与 max 的负无穷；仅在最终 store 屏蔽尾部，不能补救其先前污染有效归约。
 
-注册、参数转换和 autograd 的正确性取决于训练实际使用的公共 API，而不只是私有 kernel 调用。Kernel 变快但完整调用变慢，或训练差异未超过测量噪声，都不足以证明训练加速。多个独立有效的改动可能在布局、分派、内存生命周期或流依赖上相互影响，组合收益和正确性不能简单相加。
+降低精度或改变归约顺序可能影响误差；更高精度累加又会增加资源代价。索引、offset 和总展开 token 数需要覆盖真实取值范围，不能用一个固定整数边界代表全部算子。
 
-公共接口的 fallback 保证未覆盖输入遵守原有语义。编译资源估计、数值误差、分层耗时和目标版本共同界定实现的适用范围，单一收益数字不能推广到其他设备型号、编译器或工作负载。
+公共 API 允许别名，不代表某个 kernel 编译器支持所有指针别名。所引 Triton-Ascend FAQ 对多个输入指针指向同一存储列有限制；原地改写或减少 clone 必须同时满足接口与编译器假设。[指针别名约束][faq]
+
+`msprof op` 的设备分析与 simulator 指令流水用于解释算子瓶颈；仿真时序不等于真实训练耗时。不同候选、输入桶与编译版本需要可区分，同名 kernel 的聚合可能掩盖差异。[分析口径][profiling] 公共调用的输入整理、辅助分配和同步仍属于候选成本，kernel 局部加速不能单独证明训练收益。
+
+[profiling]: https://github.com/triton-lang/triton-ascend/blob/main/docs/en/debug_guide/profiling.md
+[programming]: https://github.com/triton-lang/triton-ascend/blob/main/docs/zh/programming_guide/index.md
+[pipeline]: https://www.hiascend.com/developer/techArticles/20240819-1
+[migration]: https://github.com/triton-lang/triton-ascend/blob/main/docs/zh/migration_guide/performance_guidelines.md
+[migration-memory]: https://github.com/triton-lang/triton-ascend/blob/main/docs/en/migration_guide/migrate_from_gpu.md
+[autotune]: https://github.com/triton-lang/triton-ascend/blob/main/docs/zh/autotune_guide.md
+[faq]: https://github.com/triton-lang/triton-ascend/blob/main/docs/zh/FAQ.md

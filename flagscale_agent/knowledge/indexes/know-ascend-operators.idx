@@ -4,21 +4,18 @@
 # To read a section: load_knowledge(name='know-ascend-operators', doc='<path below>', start_line=<L>, end_line=<L>)
 # Do NOT pass these doc paths to read_file — they are knowledge-internal.
 
-## ascend_operators/operator-optimization.md (161 lines)
-L17: 算子热点、调用链与实现判断依据
-  L23: 热点分桶与关键路径
-  L43: 三仓调用链与绑定证据
-    L61: TransformerEngine-FL dispatch
-  L82: 竞争性解释及其证据
-  L94: 实现选择与仓库归属
-  L113: 正确性与公共接口契约
-  L129: Kernel 与 public-call 计时口径
-  L146: MoE 与 GDN 的条件化诊断
+## ascend_operators/operator-optimization.md (72 lines)
+L3: Ascend 算子调用成本与接口语义
+  L7: 热点耗时来自哪里
+  L21: 可形成优化假设的机制
+  L33: 公共接口、后端与仓库边界
+  L47: 训练接口中容易遗漏的语义
+  L61: 三层性能口径
 
-## ascend_operators/kernel-experiments.md (69 lines)
-L17: Ascend kernel 的资源、正确性与性能依据
-  L21: 比较对象与收益上限
-  L27: 目标能力与版本边界
-  L33: 瓶颈与优化机制
-  L44: 资源活跃量与极端输入
-  L63: 分层性能与集成正确性
+## ascend_operators/kernel-experiments.md (58 lines)
+L3: Ascend kernel 的资源与性能机制
+  L7: 执行资源与瓶颈
+  L13: 可形成优化假设的机制
+  L26: Tiling 与片上资源活跃量
+  L34: 自动调优的作用与边界
+  L42: 正确性与测量边界

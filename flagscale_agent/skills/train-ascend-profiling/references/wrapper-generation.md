@@ -13,9 +13,9 @@
 
 ## 1. 核对入口并生成
 
-在目标容器中使用原作业的 cwd、Python 与模块路径。先确认原入口存在，核对实际加载的
-`megatron.training.training.__file__`：FlagScale 的 launcher 可将自身 `flagscale/train` 放入
-`PYTHONPATH`，因此该模块不一定来自 Megatron-LM-FL 仓库。记录实际路径和三仓版本。
+在目标容器中复用原作业已确认的 cwd、Python 与模块路径。FlagScale launcher 可将自身
+`flagscale/train` 放入 `PYTHONPATH`，因此 `megatron.training.training` 不一定来自 Megatron-LM-FL 仓库。
+只在绑定路径尚未确认或发生错误时核对实际模块文件；已有记录不重复调查。
 `--training-file` 可将核实的路径作为运行时保护；它不是按仓库名称猜出的路径。
 
 以下变量需指向本次实际位置；`RUN_DIR` 使用独立 attempt 目录。

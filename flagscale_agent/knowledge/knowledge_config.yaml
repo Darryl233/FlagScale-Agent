@@ -200,14 +200,20 @@ know-linear-attention:
     - linear_attention/01_fla_source_analysis.md
 
 know-ascend-training:
-  description: "Ascend训练调优知识：三仓配置消费、并行与显存约束、重计算/通信/图模式、测量和数值恢复语义及版本适用条件"
+  description: "Ascend训练调优知识：显存、计算效率、通信开销的候选空间与权衡，并行/重计算/融合/图模式机制、配置约束及测量和恢复语义"
   docs:
     - ascend_training/stack-capabilities.md
     - ascend_training/search-space.md
-    - ascend_training/recompute-overlap-graphs.md
+    - ascend_training/batch-and-accumulation.md
+    - ascend_training/parallelism.md
+    - ascend_training/communication.md
+    - ascend_training/recompute.md
+    - ascend_training/memory-and-sharding.md
+    - ascend_training/data-and-host.md
+    - ascend_training/graph-execution.md
     - ascend_training/measurement-and-records.md
-    - ascend_training/production-optimization.md
-    - ascend_training/sources-and-adaptation.md
+    - ascend_training/state-and-resume.md
+    - ascend_training/native-tuner.md
 
 know-ascend-profiling:
   description: "Ascend性能采集与分析知识：torch_npu profiler生命周期、导出字段、step与时钟关联、设备任务区间及通信/Host归因边界"
