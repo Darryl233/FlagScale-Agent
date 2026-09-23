@@ -2,7 +2,7 @@
 
 # 自动调优的有界单次运行
 
-`flagscale_agent.training.trial` 执行 `flagscale train [model] -c <yaml> --test`，限制单次时长并返回测量摘要。
+`flagscale_agent.skills.train-run.scripts.training_trial` 执行 `flagscale train [model] -c <yaml> --test`，限制单次时长并返回测量摘要。
 仅适用单机 Megatron；多机或其他后端使用 [直接启动](first-launch.md)。沿用调用方已确认的环境和设备分配。
 
 ## 1. 准备本次 YAML
@@ -41,10 +41,10 @@
 
 ## 3. 执行并读取结果
 
-用 `shell(background=True)` 执行：
+用 `shell(background=True)` 执行内置 `train-run` 脚本：
 
 ```bash
-PYTHONUNBUFFERED=1 python -m flagscale_agent.training.trial --request /workspace/configs/baseline-01.json
+PYTHONUNBUFFERED=1 python -m flagscale_agent.skills.train-run.scripts.training_trial --request /workspace/configs/baseline-01.json
 ```
 
 保存 job id，用 `shell_jobs(action="wait", job_id=..., timeout=60)` 等待；仍在运行就继续等待，无需同时反复查询日志。

@@ -1,1 +1,1 @@
-"""FlagScale training trial execution and result analysis."""
+"""Compatibility package for historical training helper imports."""
