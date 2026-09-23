@@ -6,7 +6,7 @@
 import json
 
 from flagscale_agent.react.tools.base import Tool
-from flagscale_agent.training_results import analyze_results, summarize_results
+from flagscale_agent.training.results import analyze_results, summarize_results
 
 
 class AnalyzeTrainingResultsTool(Tool):

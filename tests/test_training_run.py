@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from flagscale_agent.training_run import run_training
+from flagscale_agent.training.trial import run_training
 
 
 @pytest.fixture
@@ -200,7 +200,7 @@ def test_cli_stdout_is_compact_and_errors_return_nonzero(trial, monkeypatch, tmp
     path = tmp_path / "request.json"
     path.write_text(json.dumps(request))
     monkeypatch.setenv("FAKE_MODE", "late_error")
-    completed = subprocess.run([sys.executable, "-m", "flagscale_agent.training_run", "--request", str(path)],
+    completed = subprocess.run([sys.executable, "-m", "flagscale_agent.training.trial", "--request", str(path)],
                                capture_output=True, text=True)
     assert completed.returncode == 1
     result = json.loads(completed.stdout)
@@ -215,7 +215,7 @@ def test_sigterm_marks_interrupted_and_stops_owned_launcher(trial, monkeypatch, 
     path = tmp_path / "request.json"
     path.write_text(json.dumps(request))
     monkeypatch.setenv("FAKE_MODE", "slow")
-    process = subprocess.Popen([sys.executable, "-m", "flagscale_agent.training_run", "--request", str(path)],
+    process = subprocess.Popen([sys.executable, "-m", "flagscale_agent.training.trial", "--request", str(path)],
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
         deadline = time.monotonic() + 5

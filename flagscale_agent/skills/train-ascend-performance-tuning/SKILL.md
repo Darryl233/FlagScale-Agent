@@ -74,7 +74,7 @@ For the final throughput candidate, default to three pairs of independent retest
 ```bash
 RETEST_REQUEST_DIR=/absolute/path/to/retest-requests
 for run in pair1-baseline pair1-candidate pair2-candidate pair2-baseline pair3-baseline pair3-candidate; do
-  PYTHONUNBUFFERED=1 python -m flagscale_agent.training_run \
+  PYTHONUNBUFFERED=1 python -m flagscale_agent.training.trial \
     --request "${RETEST_REQUEST_DIR}/${run}.json" || exit $?
 done
 ```
