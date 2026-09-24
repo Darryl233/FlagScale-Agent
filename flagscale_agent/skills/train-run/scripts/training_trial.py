@@ -23,7 +23,7 @@ from pathlib import Path
 
 import yaml
 
-from flagscale_agent.react.tools.analyze_training_results import analyze_results
+from .analyze_training_results import analyze_results
 
 
 def _atomic_json(path, value):

@@ -1,12 +1,12 @@
 # Copyright 2026 FlagOS Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Deterministic Megatron log analysis and its Agent tool.
+"""Analyze Megatron training logs for the train-run skill.
 
 Use one loss-reporting log per *attempt*, with log_interval=1. Do not concatenate
-rank logs or resumed attempts. The CLI compatibility entrypoint is
-``python -m flagscale_agent.react.tools.analyze_training_results --request request.json``; its request
-has the same fields as ``analyze_results``.
+rank logs or resumed attempts. Run ``python analyze_training_results.py
+--request request.json`` with the arguments of ``analyze_results`` in JSON.
+Stdout contains a summary; use ``--detail full`` for the complete report.
 This measures logged training steps, not end-to-end job time or convergence.
 """
 
@@ -19,8 +19,6 @@ import re
 import statistics
 import tempfile
 from pathlib import Path
-
-from flagscale_agent.react.tools.base import Tool
 
 _NUMBER = r"[+-]?(?:\d+(?:\.\d*)?(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?|inf(?:inity)?|nan)"
 _ITERATION = re.compile(r"\biteration\s+(\d+)(?:\s*/\s*(\d+))?", re.I)
@@ -229,7 +227,7 @@ def analyze_results(*, runs, end_iteration, global_batch_size, sequence_length,
     """Analyze a single fixed candidate against baseline attempts in chronological order.
 
     Assumptions are explicit: log_interval=1, same workload/seed/data and batch-token
-    definition across runs. The tool does not infer config equivalence from timing.
+    definition across runs. The analyzer does not infer config equivalence from timing.
     ``exit_code_path`` is a file containing the real launcher exit status, captured
     by the launcher; its absence never implies successful process completion.
     """
@@ -389,7 +387,7 @@ def analyze_results(*, runs, end_iteration, global_batch_size, sequence_length,
 
 
 def summarize_results(result):
-    """Keep decision metrics in tool context; detailed evidence stays in the report.
+    """Keep decision metrics in the summary; detailed evidence stays in the report.
 
     This is a projection of the full result, not another acceptance decision.
     Missing launcher/counter evidence and unverified checks remain explicit.
@@ -446,69 +444,17 @@ def summarize_results(result):
     return summary
 
 
-
-class AnalyzeTrainingResultsTool(Tool):
-    name = "analyze_training_results"
-    description = (
-        "Parse exact Megatron training logs and compare one fixed candidate with its baseline. "
-        "Computes timing, throughput, repeated-run spread and actual iteration-aligned loss differences. "
-        "Requires log_interval=1 and runs in chronological order. Distinguishes missing evidence, "
-        "launcher completion, short-run loss tolerance and unverified all-rank/convergence checks. "
-        "Use before reporting performance or quality. Returns concise metrics by default; "
-        "output_path saves the complete evidence JSON, and detail=full returns it in context."
-    )
-    parameters = {
-        "type": "object",
-        "properties": {
-            "runs": {
-                "type": "array", "minItems": 1, "maxItems": 32,
-                "description": "Attempts in actual chronological order; one fixed workload and candidate config. Use one original loss-reporting rank log per attempt. Hard-linked or byte-identical logs cannot establish independent runs and are rejected.",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "run_id": {"type": "string", "description": "Unique attempt identifier."},
-                        "role": {"type": "string", "enum": ["baseline", "candidate"]},
-                        "log_path": {"type": "string", "description": "Exact existing log file; no latest-run guessing."},
-                        "exit_code_path": {"type": "string", "description": "Optional existing file containing the actual launcher exit code as an integer. Missing means completion unknown."},
-                    },
-                    "required": ["run_id", "role", "log_path"],
-                    "additionalProperties": False,
-                },
-            },
-            "first_iteration": {"type": "integer", "minimum": 0, "description": "First expected logged iteration (default 1)."},
-            "end_iteration": {"type": "integer", "minimum": 0, "description": "Last expected iteration, inclusive. Missing steps are errors."},
-            "warmup_steps": {"type": "integer", "minimum": 0, "description": "Initial iterations excluded from timing (default 10), still checked for loss/anomalies."},
-            "global_batch_size": {"type": "integer", "minimum": 1},
-            "sequence_length": {"type": "integer", "minimum": 1, "description": "Fixed tokens per sample; padding/packing or real-data throughput needs separate accounting."},
-            "loss_atol": {"type": "number", "minimum": 0, "description": "Predeclared absolute tolerance for logged LM loss. No implicit quality pass if omitted."},
-            "loss_rtol": {"type": "number", "minimum": 0, "description": "Relative tolerance: abs(candidate-baseline) <= atol + rtol*abs(baseline)."},
-            "max_run_variation_pct": {"type": "number", "minimum": 0, "description": "Predeclared range/median limit across per-run means. Requires at least two baseline and two candidate attempts in adjacent interleaved pairs."},
-            "output_path": {"type": "string", "description": "Optional JSON output file in an existing directory; cannot overwrite evidence."},
-            "detail": {"type": "string", "enum": ["summary", "full"], "default": "summary", "description": "Summary returns reporting metrics and unresolved checks; full additionally returns all evidence diagnostics. output_path always saves the full report."},
-        },
-        "required": ["runs", "end_iteration", "global_batch_size", "sequence_length"],
-        "additionalProperties": False,
-    }
-
-    def execute(self, *, detail="summary", **kwargs):
-        try:
-            if detail not in ("summary", "full"):
-                raise ValueError("detail must be summary or full")
-            result = analyze_results(**kwargs)
-            if detail == "summary":
-                result = summarize_results(result)
-        except (OSError, ValueError, TypeError, KeyError) as exc:
-            result = {"status": "error", "error": str(exc)}
-        return json.dumps(result, indent=2, ensure_ascii=False, allow_nan=False)
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--request", required=True, help="JSON request using analyze_results arguments")
+    parser.add_argument("--detail", choices=("summary", "full"), default="summary",
+                        help="Stdout detail; output_path always saves the full report")
     args = parser.parse_args(argv)
     try:
         request = json.loads(Path(args.request).read_text(encoding="utf-8"))
         result = analyze_results(**request)
+        if args.detail == "summary":
+            result = summarize_results(result)
     except (OSError, ValueError, TypeError, KeyError) as exc:
         print(json.dumps({"status": "error", "error": str(exc)}, ensure_ascii=False))
         return 2

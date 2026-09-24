@@ -7,10 +7,25 @@ import json
 import os
 import subprocess
 import sys
+from importlib import import_module
+from pathlib import Path
 
 import pytest
 
-from flagscale_agent.react.tools.analyze_training_results import AnalyzeTrainingResultsTool, analyze_results
+ANALYSIS_MODULE = "flagscale_agent.skills.train-run.scripts.analyze_training_results"
+analysis = import_module(ANALYSIS_MODULE)
+analyze_results = analysis.analyze_results
+
+
+def _cli(tmp_path, request, *args):
+    path = tmp_path / "analysis-request.json"
+    path.write_text(json.dumps(request))
+    # Exercise the documented file entrypoint without an installed Agent package.
+    return subprocess.run(
+        [sys.executable, "-I", str(Path(analysis.__file__).resolve()),
+         "--request", str(path), *args],
+        cwd=tmp_path, capture_output=True, text=True, check=False,
+    )
 
 
 def _line(i, duration=100, loss=4, *, counters=True, batch=64, grad="1.234"):
@@ -65,12 +80,13 @@ def test_real_session_regression_metrics_and_actual_loss_difference(tmp_path):
 
 
 def test_missing_path_returns_structured_error_and_does_not_create_report(tmp_path):
-    tool = AnalyzeTrainingResultsTool()
-    result = json.loads(tool.execute(
+    proc = _cli(tmp_path, dict(
         runs=[{"run_id": "bad", "role": "baseline", "log_path": str(tmp_path / "missing")}],
         end_iteration=40, global_batch_size=64, sequence_length=512,
         output_path=str(tmp_path / "result.json"),
     ))
+    assert proc.returncode == 2
+    result = json.loads(proc.stdout)
     assert result["status"] == "error"
     assert "missing" in result["error"]
     assert not (tmp_path / "result.json").exists()
@@ -299,29 +315,43 @@ def test_omitted_optional_metric_remains_unknown_without_parse_error(tmp_path):
     assert result["runs"][0]["measurement"]["counters"]["nan_iterations"]["status"] == "unknown"
 
 
-def test_cli_with_request_file(tmp_path):
+@pytest.mark.parametrize("entrypoint", ["file", "module"])
+@pytest.mark.parametrize("detail", ["summary", "full"])
+def test_cli_with_request_file(tmp_path, entrypoint, detail):
     request = {
         "runs": [_run(tmp_path, "b", "baseline")], "end_iteration": 40,
         "global_batch_size": 64, "sequence_length": 512,
     }
     path = tmp_path / "request.json"
     path.write_text(json.dumps(request))
-    proc = subprocess.run([sys.executable, "-m", "flagscale_agent.react.tools.analyze_training_results", "--request", str(path)],
-                          capture_output=True, text=True, check=False)
+    if entrypoint == "file":
+        proc = _cli(tmp_path, request, "--detail", detail)
+    else:
+        proc = subprocess.run(
+            [sys.executable, "-m", ANALYSIS_MODULE, "--request", str(path), "--detail", detail],
+            capture_output=True, text=True, check=False,
+        )
     assert proc.returncode == 0, proc.stderr
-    assert json.loads(proc.stdout)["runs"][0]["measurement"]["step_time_ms"]["count"] == 30
+    result = json.loads(proc.stdout)
+    if detail == "full":
+        assert result["runs"][0]["measurement"]["step_time_ms"]["count"] == 30
+    else:
+        assert result["detail"] == "summary"
+        assert result["runs"][0]["mean_step_time_ms"] == 100
 
 
-def test_tool_summary_uses_same_aggregate_for_timing_throughput_and_speedup(tmp_path):
+def test_cli_summary_uses_same_aggregate_for_timing_throughput_and_speedup(tmp_path):
     runs = [_run(tmp_path, "b1", "baseline", duration=130, exit_code=0),
             _run(tmp_path, "c1", "candidate", duration=50, exit_code=0),
             _run(tmp_path, "c2", "candidate", duration=60, exit_code=0),
             _run(tmp_path, "b2", "baseline", duration=150, exit_code=0)]
     target = tmp_path / "report.json"
-    summary = json.loads(AnalyzeTrainingResultsTool().execute(
+    proc = _cli(tmp_path, dict(
         runs=runs, end_iteration=40, global_batch_size=64, sequence_length=512,
         loss_atol=0, max_run_variation_pct=25, output_path=str(target),
     ))
+    assert proc.returncode == 0, proc.stderr
+    summary = json.loads(proc.stdout)
     full = json.loads(target.read_text())
     assert summary["detail"] == "summary"
     assert summary["output_path"] == str(target)
@@ -337,12 +367,14 @@ def test_tool_summary_uses_same_aggregate_for_timing_throughput_and_speedup(tmp_
     assert summary["comparison"]["acceptance_checks"]["all_rank_completion"] == "not_verified"
 
 
-def test_tool_summary_preserves_unknown_exits_counters_and_unset_quality_limits(tmp_path):
+def test_cli_summary_preserves_unknown_exits_counters_and_unset_quality_limits(tmp_path):
     runs = [_run(tmp_path, "b", "baseline", counters=False),
             _run(tmp_path, "c", "candidate", duration=50)]
-    summary = json.loads(AnalyzeTrainingResultsTool().execute(
+    proc = _cli(tmp_path, dict(
         runs=runs, end_iteration=40, global_batch_size=64, sequence_length=512,
     ))
+    assert proc.returncode == 0, proc.stderr
+    summary = json.loads(proc.stdout)
     assert summary["status"] == "ok"  # Evidence validity is not acceptance.
     assert summary["output_path"] is None
     assert summary["runs"][0]["launcher_status"] == "unknown"
@@ -355,12 +387,14 @@ def test_tool_summary_preserves_unknown_exits_counters_and_unset_quality_limits(
     assert checks["repeatability_within_declared_limit"] is False
 
 
-def test_tool_summary_keeps_invalid_evidence_errors_without_reported_speedup(tmp_path):
+def test_cli_summary_keeps_invalid_evidence_errors_without_reported_speedup(tmp_path):
     runs = [_run(tmp_path, "b", "baseline"),
             _run(tmp_path, "c", "candidate", duration=1, count=20, exit_code=1)]
-    summary = json.loads(AnalyzeTrainingResultsTool().execute(
+    proc = _cli(tmp_path, dict(
         runs=runs, end_iteration=40, global_batch_size=64, sequence_length=512,
     ))
+    assert proc.returncode == 1
+    summary = json.loads(proc.stdout)
     assert summary["status"] == "invalid_evidence"
     assert summary["runs"][1]["iteration_coverage"] == "incomplete"
     assert summary["runs"][1]["launcher_status"] == "failed"
@@ -372,21 +406,22 @@ def test_tool_summary_keeps_invalid_evidence_errors_without_reported_speedup(tmp
     assert performance["tokens_per_second"] == {"baseline": None, "candidate": None}
 
 
-def test_tool_full_detail_matches_saved_full_report_and_summary_reduces_context(tmp_path):
+def test_cli_full_detail_matches_saved_full_report_and_summary_reduces_context(tmp_path):
     runs = [_run(tmp_path, str(i), role, duration=100 + i) for i, role in enumerate(
         ["baseline", "candidate"] * 4)]
     request = dict(runs=runs, end_iteration=40, global_batch_size=64, sequence_length=512,
                    loss_atol=0, max_run_variation_pct=20,
                    output_path=str(tmp_path / "report.json"))
-    tool = AnalyzeTrainingResultsTool()
-    compact = tool.execute(**request)
-    full = tool.execute(**request, detail="full")
-    assert json.loads(full) == json.loads((tmp_path / "report.json").read_text())
-    assert "log_evidence" in json.loads(full)["runs"][0]
-    assert len(compact) < len(full) / 2
-    invalid = json.loads(tool.execute(**dict(request, output_path=str(tmp_path / "invalid.json")),
-                                      detail="verbose"))
-    assert invalid == {"status": "error", "error": "detail must be summary or full"}
+    compact = _cli(tmp_path, request)
+    full = _cli(tmp_path, request, "--detail", "full")
+    assert compact.returncode == full.returncode == 0
+    assert json.loads(full.stdout) == json.loads((tmp_path / "report.json").read_text())
+    assert "log_evidence" in json.loads(full.stdout)["runs"][0]
+    assert len(compact.stdout) < len(full.stdout) / 2
+    invalid = _cli(tmp_path, dict(request, output_path=str(tmp_path / "invalid.json")),
+                   "--detail", "verbose")
+    assert invalid.returncode == 2
+    assert "invalid choice" in invalid.stderr
     assert not (tmp_path / "invalid.json").exists()
 
 

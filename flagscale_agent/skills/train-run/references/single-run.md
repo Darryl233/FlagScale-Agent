@@ -49,7 +49,7 @@ PYTHONUNBUFFERED=1 python -m flagscale_agent.skills.train-run.scripts.training_t
 
 保存 job id，用 `shell_jobs(action="wait", job_id=..., timeout=60)` 等待；仍在运行就继续等待，无需同时反复查询日志。
 结束后读取返回摘要；详情在 `experiment.exp_dir/agent_run/run.json`，测量在同目录的 `measurement.json`。
-使用其中给出的 `log_path`、`exit_code_path` 交给 `analyze_training_results` 比较，不猜测日志路径或为取结果重跑训练。
+将其中给出的 `log_path`、`exit_code_path` 返回调用方的比较流程；分析实现为本 skill 的 `scripts/analyze_training_results.py`。不猜测日志路径或为取结果重跑训练。
 
 启动故障或退出状态不清时先处理本次问题；诊断从同目录 `launcher.log` 开始。确认自有 worker 已退出后，将 OOM、无收益或质量失败返回调优主流程，由其选择后续候选。
 `status="measured"` 表示获得测量，不代表质量验收或全部 rank 成功退出；退出证据缺失时保留“未验证”。

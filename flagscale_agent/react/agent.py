@@ -71,7 +71,6 @@ from flagscale_agent.react.proposals import ProposalRegistry
 from flagscale_agent.react.tools.proposal import ProposalTool
 from flagscale_agent.react.plan import TaskPlan
 from flagscale_agent.react.tools.monitor import FlagScaleTrainMonitorTool
-from flagscale_agent.react.tools.analyze_training_results import AnalyzeTrainingResultsTool
 from flagscale_agent.react.tools.plan_create import PlanCreateTool
 from flagscale_agent.react.tools.plan_update import PlanUpdateTool
 from flagscale_agent.react.tools.plan_status import PlanStatusTool
@@ -414,7 +413,6 @@ class WorkerAgent:
         # Web and infrastructure tools
         self.tool_registry.register(WebFetchTool(proxies=self._build_proxies()))
         self.tool_registry.register(FlagScaleTrainMonitorTool(classify_fn=self._judge_confirm))
-        self.tool_registry.register(AnalyzeTrainingResultsTool())
         self.tool_registry.register(InspectCheckpointTool())
         
         # Context management tools

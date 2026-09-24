@@ -2,24 +2,36 @@
 
 # Analyze Training Results
 
-Use `analyze_training_results` for Megatron logs with `log_interval=1`. Supply the exact loss-reporting rank log from each attempt, not a directory, concatenated rank logs, or a guessed timestamp. Keep one fixed workload and one fixed candidate in each comparison request. For other log formats, state the unsupported format and use a compatible analysis tool with explicit measurement rules.
+Use the [train-run analysis script](../../train-run/scripts/analyze_training_results.py) for Megatron logs with training `log_interval=1`. Supply the exact loss-reporting rank log from each attempt, not a directory, concatenated rank logs, or a guessed timestamp. Keep one fixed workload and one fixed candidate in each comparison request. For other log formats, state the unsupported format and use a compatible analysis script with explicit measurement rules.
 
-An initial screening comparison uses the actual paths and iteration window:
+Save a JSON request using the actual paths, iteration window, and agreed tolerances. For example:
 
-```python
-analyze_training_results(
-    runs=[
-        {"run_id": "baseline-01", "role": "baseline", "log_path": baseline_log},
-        {"run_id": "candidate-01", "role": "candidate", "log_path": candidate_log},
-    ],
-    first_iteration=1, end_iteration=40, warmup_steps=10,
-    global_batch_size=64, sequence_length=512,
-    loss_atol=declared_loss_atol,
-    output_path=results_json,
-)
+```json
+{
+  "runs": [
+    {"run_id": "baseline-01", "role": "baseline", "log_path": "/path/to/baseline/stdout.log", "exit_code_path": "/path/to/baseline/launcher.exit_code"},
+    {"run_id": "candidate-01", "role": "candidate", "log_path": "/path/to/candidate/stdout.log", "exit_code_path": "/path/to/candidate/launcher.exit_code"}
+  ],
+  "first_iteration": 1,
+  "end_iteration": 40,
+  "warmup_steps": 10,
+  "global_batch_size": 64,
+  "sequence_length": 512,
+  "loss_atol": 0.00001,
+  "output_path": "/path/to/results.json"
+}
 ```
 
-The numbers above illustrate a 40-step, fixed-length workload; use the current contract's values and predeclared tolerances. `output_path` must have an existing parent directory. The tool saves the complete computed JSON, including validated evidence paths and hashes, but returns a concise summary by default. Use that summary for decisions and reporting; request `detail="full"` only when a specific diagnostic needs the details. If the target has the package but the native tool is unavailable, write the analysis request without `detail` as JSON and run `python -m flagscale_agent.react.tools.analyze_training_results --request request.json` in that environment; this CLI preserves its full JSON output. Do not relaunch training just to repair an analysis request.
+`TRAIN_RUN_SKILL_DIR` is the directory containing the loaded `train-run/SKILL.md`. Run:
+
+```bash
+python "$TRAIN_RUN_SKILL_DIR/scripts/analyze_training_results.py" \
+  --request /absolute/path/analysis-request.json
+```
+
+The example values are illustrative; use the current workload and predeclared tolerances. `runs`, `end_iteration`, `global_batch_size`, and `sequence_length` are required. `first_iteration` defaults to 1 and `warmup_steps` to 10; warmup is excluded from timing but included in loss checks. Optional `loss_rtol` combines with `loss_atol` as `abs(candidate - baseline) <= atol + rtol * abs(baseline)`. Omit `exit_code_path` when genuine exit evidence is unavailable.
+
+`output_path` must have an existing parent directory. The script saves the complete JSON, including evidence paths and hashes, and prints a concise summary. Add `--detail full` only for a diagnostic that needs the complete stdout report. Exit codes are `0` for parsed valid evidence, `1` for invalid evidence, and `2` for a request or file error; zero does not mean acceptance. Do not relaunch training just to repair an analysis request.
 
 For final repeats, supply attempts in actual chronological order as B/C, C/B, B/C pairs, and pass the agreed `max_run_variation_pct`. Each candidate attempt uses the same candidate configuration. One old baseline plus repeated candidates does not establish repeatability. The analyzer requires at least two pairs to assess a declared spread limit; use the task's repeat count (the workflow starts with three pairs when unspecified). It does not conduct a statistical significance test.
 
@@ -37,7 +49,7 @@ The complete report has these additional evidence boundaries:
 | `comparison.repeatability` | This comparison's run counts, pairing and measured spread against the declared limit |
 | `comparison.acceptance_checks` | Separate checks to combine with workload equivalence, all-rank status and task-specific requirements |
 
-Missing skip/NaN counters stay unknown. Omitted loss tolerances do not pass quality. A finite, close loss trajectory does not establish parameter equivalence or long-term convergence. No input to this tool verifies configuration/seed/data equivalence; confirm those from the saved effective configurations and workload records. Use profiler evidence before making a bottleneck attribution; timing alone supports a performance observation and a hypothesis.
+Missing skip/NaN counters stay unknown. Omitted loss tolerances do not pass quality. A finite, close loss trajectory does not establish parameter equivalence or long-term convergence. No input to this script verifies configuration/seed/data equivalence; confirm those from the saved effective configurations and workload records. Use profiler evidence before making a bottleneck attribution; timing alone supports a performance observation and a hypothesis.
 
 If the launcher captured its exit status, provide `exit_code_path` per attempt, pointing to the actual file containing its integer exit code. Do not create a zero exit file afterward based on step count or process absence. Launcher success still does not independently verify every remote worker.
 
