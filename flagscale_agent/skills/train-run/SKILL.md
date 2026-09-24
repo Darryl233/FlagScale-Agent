@@ -28,7 +28,15 @@ Launch, observe, stop and verify a training job from the supplied recipe. Reuse 
 PYTHONUNBUFFERED=1 flagscale train -c /absolute/path/recipe.yaml --test
 ```
 
-`--test` makes this workflow's CLI run training in the foreground; it does not reduce iterations. Set the agreed `train.model.train_iters` in the recipe. If the installed CLI requires MODEL, add its confirmed name after `train`. More parameters: [launch reference](references/first-launch.md); rejected arguments: `flagscale train --help`.
+| Parameter or setting | Purpose |
+| --- | --- |
+| `-c <yaml>` / `--config <yaml>` | Select the full FlagScale recipe |
+| `--test` | Run real training in the foreground; it does not reduce iterations |
+| `train.model.train_iters` | Set the agreed iteration count in the recipe |
+| `experiment.runner.nproc_per_node` | Match workers per node to the assigned devices |
+| `experiment.exp_dir` | Select this attempt's output directory |
+
+If the installed CLI requires MODEL, add its confirmed name after `train`. For rejected arguments, check `flagscale train --help`. Use `--dryrun` instead of `--test` only when generated scripts need inspection; it does not run training. The bounded path requires a fresh output directory, so use a separate directory for any dryrun.
 
 **Bounded single-host Megatron measurements** — read [single-run execution](references/single-run.md) once, use its request/launch/wait procedure, and reuse it for subsequent trials. It calls the FlagScale CLI, enforces a timeout and returns compact evidence. Do not also run the direct-launch monitoring loop for the same job; inspect extra logs only for a missing fact or anomaly.
 
@@ -41,6 +49,8 @@ Use a unique output directory for each attempt. Preserve config-relative depende
 3. A monitor response with no logs yet is not failure. Wait within the run's budget; inspect again for progress, completion or an error. Use `mode="watch"` only when the selected device reference confirms its probes are compatible. Log locations and metric interpretation are in [monitoring](references/monitoring.md), read when needed.
 4. Verify expected iterations/progress, loss and gradient health, current-run errors and owned-worker completion. CLI exit 0, loss from one rank, or absence of a crash alone is not success; some launchers return before workers or mask their failures.
 5. Append the terminal result once, then return command, output directory, job/exit evidence, exact loss-rank log and any unresolved error to the caller. Missing evidence remains unverified; do not rerun training just to retrieve known results.
+
+For measurement or comparison of completed Megatron runs, follow [result analysis](references/result-analysis.md) with the recorded logs, exit evidence, and the caller's measurement contract.
 
 ## 4. Stop or handle a failure
 

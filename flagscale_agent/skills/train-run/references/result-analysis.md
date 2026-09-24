@@ -2,7 +2,7 @@
 
 # Analyze Training Results
 
-Use the [train-run analysis script](../../train-run/scripts/analyze_training_results.py) for Megatron logs with training `log_interval=1`. Supply the exact loss-reporting rank log from each attempt, not a directory, concatenated rank logs, or a guessed timestamp. Keep one fixed workload and one fixed candidate in each comparison request. For other log formats, state the unsupported format and use a compatible analysis script with explicit measurement rules.
+Use the [analysis script](../scripts/analyze_training_results.py) for Megatron logs with training `log_interval=1`. Supply the exact loss-reporting rank log from each attempt, not a directory, concatenated rank logs, or a guessed timestamp. Keep one fixed workload and one fixed candidate in each comparison request. For other log formats, state the unsupported format and use a compatible analysis script with explicit measurement rules.
 
 Save a JSON request using the actual paths, iteration window, and agreed tolerances. For example:
 
@@ -33,7 +33,7 @@ The example values are illustrative; use the current workload and predeclared to
 
 `output_path` must have an existing parent directory. The script saves the complete JSON, including evidence paths and hashes, and prints a concise summary. Add `--detail full` only for a diagnostic that needs the complete stdout report. Exit codes are `0` for parsed valid evidence, `1` for invalid evidence, and `2` for a request or file error; zero does not mean acceptance. Do not relaunch training just to repair an analysis request.
 
-For final repeats, supply attempts in actual chronological order as B/C, C/B, B/C pairs, and pass the agreed `max_run_variation_pct`. Each candidate attempt uses the same candidate configuration. One old baseline plus repeated candidates does not establish repeatability. The analyzer requires at least two pairs to assess a declared spread limit; use the task's repeat count (the workflow starts with three pairs when unspecified). It does not conduct a statistical significance test.
+For repeated comparisons, supply attempts in actual chronological order as adjacent B/C or C/B pairs, and pass the agreed `max_run_variation_pct`. Each candidate attempt uses the same candidate configuration. One old baseline plus repeated candidates does not establish repeatability. The analyzer requires at least two pairs to assess a declared spread limit; use the calling workflow's agreed repeat count. It does not conduct a statistical significance test.
 
 The default summary includes per-run timing, launcher status, skip/NaN counters, evidence errors, comparison metrics and unchanged acceptance checks. In `comparison.performance`, `median_run_mean_step_time_ms`, `tokens_per_second`, and `observed_speedup` use the same aggregation; copy these values directly into the final report. Do not substitute averages of individual throughputs or recalculate throughput by hand. `run_variation_pct` is the measured range divided by the median of per-run mean times. Missing evidence stays unknown and `status="ok"` does not mean acceptance.
 

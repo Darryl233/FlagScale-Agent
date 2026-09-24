@@ -4,7 +4,7 @@
 
 ## When to use
 
-Use this method when configuration, logs, a profile, or a minimal reproduction supports a hypothesis about a specific operator or backend. Switching an integrated implementation may be enough. New integration or code changes must be within the task's authorization; if only diagnosis was requested, return the diagnosis.
+Use this method when configuration, logs, a profile, or a minimal reproduction supports a hypothesis about a specific operator or backend. Switching an integrated implementation may be enough.
 Reuse evidence about the actual call, shape/dtype/stride, relevant rank/stage, and backend. Trace only call boundaries still unclear; do not search every repository.
 For interfaces and full-call costs, read `know-ascend-operators`: `ascend_operators/operator-optimization.md` as needed. Read `ascend_operators/kernel-experiments.md` when changing a device kernel.
 Organize candidates by target operator. Both configuration selection among integrated implementations and new integration belong here; for graph capture or compilation boundaries, use the [graph and compilation method](graph-execution.md).
@@ -23,11 +23,11 @@ Start from the public call actually used in training. Choose an operation suppor
 | Triton tiling and task assignment | Change actual target-kernel parameters such as `BLOCK_SIZE` or `BLOCK_M/N/K` and the associated grid/loops. When dispatch overhead dominates small tasks, compare processing multiple tiles with in-kernel strides. If resources exceed limits, shrink tiles or shorten intermediate lifetimes. If needed and supported by the current version, compare a small set of valid `triton.Config` choices through `triton.autotune`, updating the grid for each candidate. |
 | Ascend C transfer/compute pipeline | In the target implementation's tiled `CopyIn/Compute/CopyOut` loop, compare single and double buffering. When using `TPipe.InitBuffer(queue, num, len)`, update buffer count, tile length, and loop coverage together. Preserve queue dependencies and tail-tile handling; changing only the buffer count to 2 is insufficient. |
 
-These are starting points, not limits on scope or order. With critical-path evidence and budget, investigate algorithms, cross-operator intermediates, layouts, memory lifetimes, or instruction pipelines. Turn findings into concrete candidates without expanding into unrelated global dispatch rewrites or dependency upgrades.
+For deeper candidates supported by critical-path evidence, investigate algorithms, cross-operator intermediates, layouts, memory lifetimes, or instruction pipelines. Turn findings into concrete candidates without expanding into unrelated global dispatch rewrites or dependency upgrades.
 
 ## Additional checks
 
-- **Switching an integrated implementation:** Confirm that the target public call binds to the candidate and supports forward/backward and required shapes/masks. Reuse existing interface evidence; use the main loop's general quality checks. A configuration flag set to `true` does not prove the candidate took effect.
+- **Switching an integrated implementation:** Confirm that the target public call binds to the candidate and supports forward/backward and required shapes/masks. A configuration flag set to `true` does not prove the candidate took effect.
 - **Interface correctness after an implementation change:** Prefer existing public API tests and reference implementations; cover production shapes and boundaries affected by this change. Compare forward and backward for every differentiable input, including affected dtype/device/shape, stride, indices, returns, and fallback behavior. Use project tolerances. A correctness failure excludes performance comparison.
 - **Integration activation:** Confirm that the training public call actually binds to the candidate. Successfully calling a vendor/private kernel directly is not equivalent evidence. Reuse the existing integration conclusion when changing only the kernel.
 - **Local performance:** Reuse microbenchmarks as needed. Explain kernel and full public-call costs separately; timing must include necessary device completion. Add operator analysis such as `msprof op` only if the reason is unclear. Use the current tool version and keep diagnostic collection separate from performance measurement.

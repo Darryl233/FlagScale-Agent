@@ -4,7 +4,7 @@
 
 ## When to use
 
-Use this method when configuration, logs, or a profile support a hypothesis about communication waits, extra buffers, or degraded overlap. A cheap configuration comparison does not require a full profile first.
+Use this method when configuration, logs, or a profile support a hypothesis about communication waits, extra buffers, or degraded overlap.
 For parameter dependencies, read `know-ascend-training`: `ascend_training/communication.md` as needed. For recomputation, read `ascend_training/recompute.md`; for graph execution, read `ascend_training/graph-execution.md`.
 
 ## Generate candidates
@@ -18,12 +18,9 @@ Start from the parent recipe's effective configuration. Choose an operation supp
 | PP P2P | If the current PP/VPP schedule permits it, disable with `train.system.no_overlap_p2p_communication: true`. For an enabled comparison, remove this disabling field or set it to `false`. The internal effective field is `overlap_p2p_comm`; do not add it directly as a YAML switch. If either state is invalid, do not flip it in isolation. Handle layout dependencies through the [parallelism method](parallelism.md). |
 | MoE dispatcher / overlap | Choose one dispatcher replacement or dispatch/combine or shared-expert overlap comparison among implementations already integrated in this stack. Preserve routing, top-k, capacity, and token-dropping semantics; record required coupled changes. |
 
-These are starting points, not limits on search scope or order. When evidence points to communication as a bottleneck or opportunity, use the available budget for deeper investigation:
-Examine message sizes and call counts, rank load and topology, compute/communication dependencies, and buffer lifetimes along the relevant communication path. Extend analysis across modules and ranks if needed.
-Use the findings to explore communication coalescing/chunking, TP/CP/EP layouts and mapping, dispatch/combine data flow, or deeper scheduling and backend changes. The table need not be exhausted first.
-For layout changes, use the [parallelism method](parallelism.md); for operator implementation changes, use the [operator method](operator.md). Source changes must remain within the task's authorization.
-
-Reuse confirmed parameter mappings and dependencies; investigate only conditions missing for the current candidate. Inspect the corresponding consumer if a field is rejected, rewritten, or lacks evidence of taking effect.
+For deeper communication candidates, examine message sizes and call counts, rank load and topology, compute/communication dependencies, and buffer lifetimes along the relevant communication path. Extend analysis across modules and ranks if needed.
+Use the findings to explore communication coalescing/chunking, TP/CP/EP layouts and mapping, dispatch/combine data flow, or deeper scheduling and backend changes.
+For layout changes, use the [parallelism method](parallelism.md); for operator implementation changes, use the [operator method](operator.md).
 
 ## Additional checks
 

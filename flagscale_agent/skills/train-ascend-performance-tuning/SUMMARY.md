@@ -14,9 +14,10 @@
  limitations under the License.
  -->
 
-# Ascend Training Performance Tuning
+# Train-Ascend-Performance-Tuning — Summary
 
-Confirm the goal → establish a baseline → retain hypotheses with different mechanisms → choose experiments that distinguish them → continue, combine, or switch based on evidence → retest and deliver.
-Consider known methods and new hypotheses across memory, compute, and communication. Aim for three different mechanisms by default, adjusting for evidence and budget. Record expected observations and supporting/opposing evidence in the existing experiment record. Choose by potential gain, information value, and cost, without a fixed search order or failure count.
-The main workflow holds the decision and experiment loop. Reuse the Ascend path in `train-run` for launches. Methods cover batch size, parallelism and state sharding, recomputation and offload, communication scheduling, data and Host, graphs and compilation, and operators and backends; a method may serve several goals. Load methods and Knowledge only when selected or needed to resolve a question.
-Keep the workload and quality requirements fixed. Preserve the best verified configuration and useful memory/speed trade-offs. Deliver reproducible results and state the limits of verification.
+Optimize Ascend training capacity and throughput with FlagScale, Megatron-LM-FL, and TransformerEngine-FL.
+
+**Load when**: tuning Ascend training to fit memory, improve throughput, or investigate compute and communication bottlenecks.
+
+Establish a comparable baseline, explore hypotheses across memory, compute, and communication, compare experiments, and retest the selected configuration. Reuse `train-run` for execution and result analysis; load concrete methods, profiling, and Knowledge on demand. Deliver a reproducible configuration with measured gains, trade-offs, and remaining verification gaps.

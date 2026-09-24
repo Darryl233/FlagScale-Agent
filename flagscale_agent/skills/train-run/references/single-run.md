@@ -3,7 +3,7 @@
 # 自动调优的有界单次运行
 
 `flagscale_agent.skills.train-run.scripts.training_trial` 执行 `flagscale train [model] -c <yaml> --test`，限制单次时长并返回测量摘要。
-仅适用单机 Megatron；多机或其他后端使用 [直接启动](first-launch.md)。沿用调用方已确认的环境和设备分配。
+仅适用单机 Megatron；多机或其他后端使用 [主流程的直接启动](../SKILL.md)。沿用调用方已确认的环境和设备分配。
 
 ## 1. 准备本次 YAML
 
@@ -49,7 +49,7 @@ PYTHONUNBUFFERED=1 python -m flagscale_agent.skills.train-run.scripts.training_t
 
 保存 job id，用 `shell_jobs(action="wait", job_id=..., timeout=60)` 等待；仍在运行就继续等待，无需同时反复查询日志。
 结束后读取返回摘要；详情在 `experiment.exp_dir/agent_run/run.json`，测量在同目录的 `measurement.json`。
-将其中给出的 `log_path`、`exit_code_path` 返回调用方的比较流程；分析实现为本 skill 的 `scripts/analyze_training_results.py`。不猜测日志路径或为取结果重跑训练。
+将其中给出的 `log_path`、`exit_code_path` 返回调用方的比较流程；脚本用法见 [结果分析](result-analysis.md)。不猜测日志路径或为取结果重跑训练。
 
 启动故障或退出状态不清时先处理本次问题；诊断从同目录 `launcher.log` 开始。确认自有 worker 已退出后，将 OOM、无收益或质量失败返回调优主流程，由其选择后续候选。
 `status="measured"` 表示获得测量，不代表质量验收或全部 rank 成功退出；退出证据缺失时保留“未验证”。

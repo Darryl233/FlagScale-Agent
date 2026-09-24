@@ -15,21 +15,12 @@ Reuse the current recipe, run records, and resource allocation. First identify t
 ## 1. Generate the wrapper
 
 Follow the [wrapper instructions](references/wrapper-generation.md) using the original training entrypoint from the target environment. `SKILL_DIR` is this skill's directory.
-
-```bash
-python "$SKILL_DIR/scripts/generate_profile_wrapper.py" \
-  --entrypoint "$TRAIN_ENTRYPOINT" --output "$RUN_DIR/train_npu_profile.py" \
-  --profile-output "$RUN_DIR/npu-profile" \
-  --wait 3 --warmup 1 --active 1 --ranks 0 --level Level1
-```
-
-The default window requires five normal `train_step` returns. Set `wait` based on known warmup behavior. Add `--training-file` only when the training module file has been verified; do not infer it from the repository name.
 For a generation-only task, deliver the wrapper, recipe change, and command, then stop. If the original entrypoint is inaccessible, deliver the command to run in the target environment and state that the file has not been generated.
 
 ## 2. Collect
 
-Copy the recipe for a separate attempt, point `experiment.task.entrypoint` to the wrapper, disable the built-in profiler as described in the wrapper instructions, and preserve the workload and distributed strategy.
-Launch through the already loaded `train-run` skill. For a supported single-node short run, follow its [bounded execution instructions](../train-run/references/single-run.md). Record `stage=profile`, the configuration, global ranks, window, logs, and exit evidence in the same experiment record.
+Prepare a separate collection recipe using the wrapper instructions; preserve the workload and distributed strategy.
+Load `train-run` if not already loaded and launch through it. For a supported single-node short run, follow its [bounded execution instructions](../train-run/references/single-run.md). Record `stage=profile`, the configuration, global ranks, window, logs, and exit evidence in the same experiment record.
 
 Training continues after the wrapper completes the collection window; the recipe's iteration count and launcher time limit must end the run. Confirm that all workers from this run have exited. On failure, return the original error and artifacts so the caller can decide whether to retry.
 
@@ -39,7 +30,7 @@ Training continues after the wrapper completes the collection window; the recipe
 python "$SKILL_DIR/scripts/profile_inspect.py" inventory "$PROFILE_DIR" > "$RUN_DIR/profile-inventory.json"
 ```
 
-Check the summary and read limits. If inventory is truncated, inspect only the relevant subdirectories next. For a newly collected profile, verify `wrapper-status.json` for each selected rank, the final entrypoint status, collection window, and real NPU events. A directory or returned callback alone does not prove a complete collection. For existing artifacts, use their actual metadata; do not invent wrapper status.
+Check the summary and read limits. If inventory is truncated, inspect only the relevant subdirectories next. For a newly collected profile, verify `wrapper-status.json` for each selected rank, the final entrypoint status, and real NPU events covering the target update with valid timestamps and device mapping. A directory or returned callback alone does not prove a complete collection. For existing artifacts, use their actual metadata; do not invent wrapper status.
 
 `inventory` identifies files and CSV headers; it does not convert a DB, raw PROF directory, or trace. Direct window analysis accepts per-task CSV columns `Start Time(us)`/`Duration(us)` or `Task Start Time(us)`/`Task Duration(us)`, plus a nonempty device column. For other formats, reuse an export method already validated in the environment. If none exists, report the format gap instead of improvising a command.
 

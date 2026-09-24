@@ -17,6 +17,7 @@ Read the user-provided configuration, command, and existing logs. Reuse the conf
 Keep the model, data and data order, sequence length, GBS, precision, optimizer math, and training starting point fixed. Use resources within the authorized scope. Parallel layout, MBS, recomputation, and implementation choices may be searched unless the user has fixed them.
 Agree on warmup, timing window, numerical tolerance, minimum gain, and maximum retest variation. The last two are distinct: a small gain is not automatically invalid just because it falls below the variation limit.
 Reuse one plan and experiment record. Preserve the original configuration; the actual paths and versions of all three repositories; the launch cwd and command; and each run's configuration, logs, and result location. Preserve existing modifications.
+Keep full logs and configurations in files; serialize updates to the shared experiment record. When adding step verification through `plan_update`, retain earlier valid entries because the supplied verification array replaces the previous one.
 When resuming a session, first inspect the plan, record, and owned jobs. Do not start training or recreate a completed plan when only checking progress or analyzing existing results.
 
 ## 2. Establish a baseline
@@ -52,12 +53,12 @@ Start from the current best configuration or another useful parent configuration
 - Use sections 4–5 for launch, wait, comparison, and adoption. A method only adds proof that it took effect, special metrics, and explanations for anomalies; it does not maintain a separate run or rollback process.
 
 Single-change experiments make attribution easier. Combine changes when there is a clear dependency or cross-direction trade-off, such as "recomputation frees memory + larger MBS"; each switch need not improve speed by itself. Preserve the full diff and do not attribute the combined result to one switch.
-Before launch, check the selected method's integer and scheduling constraints and the effective configuration. For changes to layout or state sharding, add their restore and numerical checks. Look up Knowledge or source only for capabilities still unknown for this candidate; reuse confirmed findings.
+Before launch, check the selected method's integer and scheduling constraints and the effective configuration. For changes to layout or state sharding, add their restore and numerical checks. Reuse confirmed mappings and capabilities; consult Knowledge or source for remaining gaps. If a field is rejected, rewritten, or lacks evidence of taking effect, inspect its consumer.
 
 ## 4. Experiment, compare, and update the search
 
 Run one candidate at a time under the same comparison conditions using `train-run`, including the method's effective-path and quality checks. If a target setting did not take effect or a combination is invalid, mark it as an invalid experiment and fix the configuration first. Do not include it in the benefit comparison or treat it as a rejection of the direction.
-For supported Megatron logs, use the [train-run analysis script](../train-run/scripts/analyze_training_results.py) following the [result analysis procedure](references/result-analysis.md). Supply the correct loss-rank log and existing `exit_code_path`; set training `log_interval=1` and specify the iteration range, warmup_steps, GBS, sequence_length, loss tolerance, and JSON `output_path`.
+For supported Megatron logs, follow [train-run's result analysis procedure](../train-run/references/result-analysis.md). Supply the correct loss-rank log and existing `exit_code_path`; set training `log_interval=1` and specify the iteration range, warmup_steps, GBS, sequence_length, loss tolerance, and JSON `output_path`.
 Each comparison uses one valid baseline and one fixed candidate. Use the script summary and saved JSON; inspect detailed logs only for anomalies. `status="ok"` means only that parsing succeeded.
 Compare complete-update time/throughput, peak memory, and quality. Record the configuration diff, evidence paths, and reason to keep or revert. Missing metrics are not passes.
 Compare actual results with expected observations. Update the relevant hypotheses' supporting/opposing evidence, applicable configuration range, and next experiment. Leave an unclear result unresolved; multiple hypotheses can hold at once.

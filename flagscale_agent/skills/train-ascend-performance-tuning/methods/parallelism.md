@@ -4,12 +4,12 @@
 
 ## When to use
 
-Use this method when configuration, logs, or a profile support a hypothesis about capacity, communication, pipeline bubbles, or stage/expert imbalance, or when the user explicitly requests a layout comparison. A cheap configuration comparison does not require a full profile first.
+Use this method when configuration, logs, or a profile support a hypothesis about capacity, communication, pipeline bubbles, or stage/expert imbalance, or when the user explicitly requests a layout comparison.
 Obtain candidate-relevant layout, MBS/GBS, layer distribution, and group information from the parent recipe and existing logs. If constraints are unclear, read the relevant section of `know-ascend-training`: `ascend_training/parallelism.md` as needed. For state sharding, read `ascend_training/memory-and-sharding.md` as needed.
 
 ## Generate candidates
 
-Copy the parent recipe. Starting from the effective layout, choose an operation below and state which memory cost, communication cost, or bubble it should reduce. Unless fully qualified, fields in the table belong under `train.system` in the composed configuration. Edit existing fields in place rather than defining them twice under system/model. Omit the `train` prefix when editing a child YAML mounted under `train`. Each row is a separate direction: choose nearby valid values rather than enabling the entire table at once.
+Unless fully qualified, fields in the table belong under `train.system` in the composed configuration. Edit existing fields in place rather than defining them twice under system/model. Omit the `train` prefix when editing a child YAML mounted under `train`. Each row is a separate direction: choose nearby valid values rather than enabling the entire table at once.
 
 | Direction | Concrete operation |
 | --- | --- |
@@ -23,15 +23,15 @@ Copy the parent recipe. Starting from the effective layout, choose an operation 
 | EP / ETP: expert capacity and communication | With dense TP/PP/CP fixed, change `expert_model_parallel_size` or `expert_tensor_parallel_size` separately. Explicitly fix effective ETP when comparing EP, and fix EP when comparing ETP. Preserve expert count, routing, top-k, capacity/token-dropping semantics, and dispatcher. Check expert groups and sharding. Generate a dispatcher comparison through the [communication method](communication.md). |
 
 When coupling VPP with P2P overlap, use the configuration entry in the [communication method](communication.md) and check the actual schedule; include the coupled field in the full difference.
-Preserve authorized resource scale and training mathematics. Keep MBS fixed by default; change it jointly only for an explicit capacity, compute, or schedule tradeoff. After a layout change, recheck derived DP, accumulation count, and effective GBS. Reuse established parameter constraints.
+Keep MBS fixed by default; change it jointly only for an explicit capacity, compute, or schedule tradeoff. After a layout change, recheck derived DP, accumulation count, and effective GBS.
 
-These are starting points, not limits on scope or order. With evidence and budget, investigate how topology mapping, layer allocation, scheduling, and dense/expert layouts interact. Generate broader layout or joint candidates without first exhausting the table.
-For directions without a fixed field listed, such as topology mapping, locate an entrypoint supported by the current stack. If source changes are necessary, identify the edit point and intended groups; source changes must remain within the task's authorization.
+For deeper parallelism candidates, investigate how topology mapping, layer allocation, scheduling, and dense/expert layouts interact.
+For directions without a fixed field listed, such as topology mapping, locate an entrypoint supported by the current stack. If source changes are necessary, identify the edit point and intended groups.
 
 ## Additional checks
 
 - **New sharding path or resume:** Check actual sharding and updates of master parameters/optimizer state. Verify save/load when the task requires resume. Results with a different optimizer family, precision, or initial state are not equivalent comparisons under the original conditions.
-- **Before launch:** Reuse confirmed configuration, logs, and implementation conditions. Recheck only groups, shapes, and schedules affected by this change. For TP or vocab sharding, keep actual vocabulary and embedding/output shapes comparable. If a parameter is rejected, rewritten, or lacks activation evidence, inspect the relevant parser, initializer, or Ascend override.
+- **Before launch:** Recheck only groups, shapes, and schedules affected by this change. For TP or vocab sharding, keep actual vocabulary and embedding/output shapes comparable.
 - **Short-run activation:** Verify the changed layout, stage/chunk arrangement, or actual rank groups. For CP, also check attention, sequence splits, real positions, and mask/packing. For MoE, check expert mesh and dispatcher. Establish compatibility evidence for previously unverified combinations in the candidate's short run. Record silent rewrites or fallback; successful initialization is not an activation check.
 - **Quality comparison:** Align loss, gradients, and parameter updates by actual shards under the same initial state and logical batch; do not compare local tensors merely because rank numbers match. Check the state-loading path actually used. If the task includes resume or requires complete restoration, also check optimizer, scheduler, RNG, and data progress. Read `ascend_training/state-and-resume.md` as needed for state alignment or resume.
 

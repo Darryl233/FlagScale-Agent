@@ -16,10 +16,8 @@
 
 # Train-Run — Summary
 
-Launch, monitor, stop, and verify FlagScale training with a common execution workflow and device-specific references.
+Launch, monitor, stop, and verify FlagScale training from a YAML recipe.
 
-**Load when**: launching training from a YAML recipe, stopping a run, checking assigned devices, or debugging launch failures. Tuning skills can reuse this execution workflow.
+**Load when**: launching or stopping training, running bounded single-host Megatron trials, or diagnosing launch failures.
 
-Read the device index and only the matching reference for hardware probes, runtime checks and diagnostics. NVIDIA and Ascend instructions are provided; additional platforms extend the index and add a reference without adding vendor branches to the common workflow. Documented commands do not imply framework support or hardware validation.
-
-Share `flagscale train -c ...`, job tracking and log inspection; reuse verified setup within a tuning loop. Bounded single-host measurements retain the helper's execution requirements. Profiling is loaded only when requested.
+Uses `flagscale train -c ...` with device-specific NVIDIA and Ascend references. Includes scripts for bounded trials and Megatron log analysis, preserving execution evidence and measurement reports for the calling tuning workflow.
